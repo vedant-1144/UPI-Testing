@@ -1,0 +1,27 @@
+# Logs directory
+logs/
+
+# Node modules
+node_modules/
+
+# Coverage reports
+coverage/
+
+# Environment variables
+.env
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Database files (if using file-based DB)
+*.db
+*.sqlite
