@@ -98,10 +98,10 @@
 
         <!-- Dashboard Section -->
         <div id="dashboardSection" style="display: none;">
-            <div class="row">
+            <div class="row mb-4">
                 <!-- Balance Card -->
                 <div class="col-md-4 mb-3">
-                    <div class="card bg-success text-white">
+                    <div class="card feature-card balance-card">
                         <div class="card-body">
                             <h5 class="card-title"><i class="fas fa-wallet me-2"></i>Balance</h5>
                             <h3 class="mb-0" id="balance">₹0</h3>
@@ -112,7 +112,7 @@
 
                 <!-- UPI ID Card -->
                 <div class="col-md-4 mb-3">
-                    <div class="card bg-info text-white">
+                    <div class="card feature-card upi-card">
                         <div class="card-body">
                             <h5 class="card-title"><i class="fas fa-at me-2"></i>UPI ID</h5>
                             <p class="mb-0" id="upiId">-</p>
@@ -123,15 +123,52 @@
 
                 <!-- Quick Actions -->
                 <div class="col-md-4 mb-3">
-                    <div class="card bg-warning text-dark">
+                    <div class="card feature-card actions-card">
                         <div class="card-body">
                             <h5 class="card-title"><i class="fas fa-bolt me-2"></i>Quick Actions</h5>
-                            <button class="btn btn-dark btn-sm me-2" onclick="showPaymentForm()">
+                            <button class="btn btn-light btn-sm me-2" onclick="showPaymentForm()">
                                 <i class="fas fa-paper-plane"></i> Pay
                             </button>
-                            <button class="btn btn-dark btn-sm" onclick="generateQR()">
+                            <button class="btn btn-light btn-sm" onclick="generateQR()">
                                 <i class="fas fa-qrcode"></i> QR
                             </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Dashboard Statistics -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="stat-card">
+                        <div class="stat-icon money">
+                            <i class="fas fa-rupee-sign"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3>₹45,892</h3>
+                            <p>Total Transactions</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="stat-card">
+                        <div class="stat-icon transactions">
+                            <i class="fas fa-exchange-alt"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3>24</h3>
+                            <p>Monthly Transactions</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="stat-card">
+                        <div class="stat-icon users">
+                            <i class="fas fa-user-friends"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3>5</h3>
+                            <p>Recent Contacts</p>
                         </div>
                     </div>
                 </div>
@@ -140,54 +177,90 @@
             <!-- Payment Form -->
             <div id="paymentSection" class="row mb-4" style="display: none;">
                 <div class="col-md-8">
-                    <div class="card">
+                    <div class="card payment-card">
                         <div class="card-header">
                             <h5 class="mb-0"><i class="fas fa-paper-plane me-2"></i>Send Money</h5>
                         </div>
                         <div class="card-body">
                             <form id="paymentForm">
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
-                                        <label for="toUpiId" class="form-label">To UPI ID</label>
+                                <div class="mb-4">
+                                    <label for="toUpiId" class="form-label">To UPI ID</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-at"></i></span>
                                         <input type="text" class="form-control" id="toUpiId" placeholder="recipient@bank" required>
                                     </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label for="amount" class="form-label">Amount (₹)</label>
+                                </div>
+                                <div class="mb-4">
+                                    <label for="amount" class="form-label">Amount (₹)</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-rupee-sign"></i></span>
                                         <input type="number" class="form-control" id="amount" min="0.01" max="100000" step="0.01" required>
                                     </div>
+                                    <div class="quick-amounts mt-2">
+                                        <button type="button" class="quick-amount" onclick="setAmount(100)">₹100</button>
+                                        <button type="button" class="quick-amount" onclick="setAmount(500)">₹500</button>
+                                        <button type="button" class="quick-amount" onclick="setAmount(1000)">₹1000</button>
+                                        <button type="button" class="quick-amount" onclick="setAmount(2000)">₹2000</button>
+                                    </div>
                                 </div>
-                                <div class="mb-3">
+                                <div class="mb-4">
                                     <label for="description" class="form-label">Description (Optional)</label>
-                                    <input type="text" class="form-control" id="description" placeholder="Payment description">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-comment-alt"></i></span>
+                                        <input type="text" class="form-control" id="description" placeholder="Payment description">
+                                    </div>
                                 </div>
-                                <div class="mb-3">
+                                <div class="mb-4">
                                     <label for="paymentPin" class="form-label">UPI PIN</label>
-                                    <input type="password" class="form-control" id="paymentPin" placeholder="Enter your PIN" required>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                                        <input type="password" class="form-control" id="paymentPin" placeholder="Enter your PIN" required>
+                                    </div>
                                 </div>
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-paper-plane me-2"></i>Send Money
-                                </button>
-                                <button type="button" class="btn btn-secondary ms-2" onclick="hidePaymentForm()">Cancel</button>
+                                <div class="d-grid gap-2">
+                                    <button type="submit" class="btn btn-primary btn-lg">
+                                        <i class="fas fa-paper-plane me-2"></i>Send Money
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="hidePaymentForm()">Cancel</button>
+                                </div>
                             </form>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-4">
-                    <div class="card">
+                    <div class="card contact-card">
                         <div class="card-header">
-                            <h6 class="mb-0">Quick Recipients</h6>
+                            <h6 class="mb-0"><i class="fas fa-address-book me-2"></i>Quick Recipients</h6>
                         </div>
                         <div class="card-body">
-                            <div class="d-grid gap-2">
-                                <button class="btn btn-outline-primary btn-sm" onclick="setRecipient('9876543210@simulator')">
-                                    Test User 1
-                                </button>
-                                <button class="btn btn-outline-primary btn-sm" onclick="setRecipient('9876543211@simulator')">
-                                    Test User 2
-                                </button>
-                                <button class="btn btn-outline-primary btn-sm" onclick="setRecipient('merchant@simulator')">
-                                    Test Merchant
-                                </button>
+                            <div class="contact-list">
+                                <div class="contact-item" onclick="setRecipient('9876543210@simulator')">
+                                    <div class="contact-avatar">
+                                        <i class="fas fa-user"></i>
+                                    </div>
+                                    <div class="contact-info">
+                                        <h6>Test User 1</h6>
+                                        <small>9876543210@simulator</small>
+                                    </div>
+                                </div>
+                                <div class="contact-item" onclick="setRecipient('9876543211@simulator')">
+                                    <div class="contact-avatar">
+                                        <i class="fas fa-user"></i>
+                                    </div>
+                                    <div class="contact-info">
+                                        <h6>Test User 2</h6>
+                                        <small>9876543211@simulator</small>
+                                    </div>
+                                </div>
+                                <div class="contact-item" onclick="setRecipient('merchant@simulator')">
+                                    <div class="contact-avatar merchant">
+                                        <i class="fas fa-store"></i>
+                                    </div>
+                                    <div class="contact-info">
+                                        <h6>Test Merchant</h6>
+                                        <small>merchant@simulator</small>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -197,34 +270,61 @@
             <!-- QR Code Section -->
             <div id="qrSection" class="row mb-4" style="display: none;">
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card qr-form-card">
                         <div class="card-header">
                             <h5 class="mb-0"><i class="fas fa-qrcode me-2"></i>Generate QR Code</h5>
                         </div>
                         <div class="card-body">
                             <form id="qrForm">
-                                <div class="mb-3">
+                                <div class="mb-4">
                                     <label for="qrAmount" class="form-label">Amount (₹)</label>
-                                    <input type="number" class="form-control" id="qrAmount" min="0.01" max="100000" step="0.01" required>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-rupee-sign"></i></span>
+                                        <input type="number" class="form-control" id="qrAmount" min="0.01" max="100000" step="0.01" required>
+                                    </div>
+                                    <div class="quick-amounts mt-2">
+                                        <button type="button" class="quick-amount" onclick="setQRAmount(100)">₹100</button>
+                                        <button type="button" class="quick-amount" onclick="setQRAmount(500)">₹500</button>
+                                        <button type="button" class="quick-amount" onclick="setQRAmount(1000)">₹1000</button>
+                                    </div>
                                 </div>
-                                <div class="mb-3">
+                                <div class="mb-4">
                                     <label for="merchantName" class="form-label">Merchant Name</label>
-                                    <input type="text" class="form-control" id="merchantName" placeholder="Your business name" required>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-store"></i></span>
+                                        <input type="text" class="form-control" id="merchantName" placeholder="Your business name" required>
+                                    </div>
                                 </div>
-                                <button type="submit" class="btn btn-primary">Generate QR</button>
-                                <button type="button" class="btn btn-secondary ms-2" onclick="hideQRForm()">Cancel</button>
+                                <div class="d-grid gap-2">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fas fa-qrcode me-2"></i>Generate QR
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" onclick="hideQRForm()">Cancel</button>
+                                </div>
                             </form>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-6">
-                    <div class="card" id="qrDisplay" style="display: none;">
+                    <div class="card qr-display-card" id="qrDisplay" style="display: none;">
                         <div class="card-header">
-                            <h6 class="mb-0">QR Code</h6>
+                            <h6 class="mb-0"><i class="fas fa-qrcode me-2"></i>Scan to Pay</h6>
                         </div>
                         <div class="card-body text-center">
-                            <img id="qrCodeImage" src="" alt="QR Code" class="img-fluid mb-3">
-                            <p class="text-muted" id="qrInfo"></p>
+                            <div class="qr-container">
+                                <img id="qrCodeImage" src="" alt="QR Code" class="img-fluid mb-3">
+                                <div class="qr-info">
+                                    <h5 class="text-primary" id="qrMerchantName"></h5>
+                                    <h3 class="text-success" id="qrAmountDisplay"></h3>
+                                    <p class="text-muted" id="qrInfo"></p>
+                                </div>
+                                <div class="qr-help mt-3">
+                                    <small class="text-muted">
+                                        <i class="fas fa-info-circle me-1"></i>
+                                        Scan this QR with any UPI app to pay
+                                    </small>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -233,17 +333,29 @@
             <!-- Transaction History -->
             <div class="row">
                 <div class="col-12">
-                    <div class="card">
+                    <div class="card transaction-history-card">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0"><i class="fas fa-history me-2"></i>Transaction History</h5>
-                            <button class="btn btn-outline-primary btn-sm" onclick="loadTransactions()">
-                                <i class="fas fa-sync-alt"></i> Refresh
-                            </button>
+                            <div>
+                                <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="filterTransactions('all')">
+                                    All
+                                </button>
+                                <button class="btn btn-outline-success btn-sm rounded-pill mx-1" onclick="filterTransactions('received')">
+                                    <i class="fas fa-arrow-down me-1"></i> Received
+                                </button>
+                                <button class="btn btn-outline-danger btn-sm rounded-pill" onclick="filterTransactions('sent')">
+                                    <i class="fas fa-arrow-up me-1"></i> Sent
+                                </button>
+                                <button class="btn btn-primary btn-sm rounded-circle ms-2" onclick="loadTransactions()">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <div id="transactionsList">
-                                <div class="text-center text-muted">
-                                    <i class="fas fa-spinner fa-spin"></i> Loading transactions...
+                        <div class="card-body transaction-container">
+                            <div id="transactionsList" class="animate-list">
+                                <div class="text-center py-5">
+                                    <div class="loading-spinner mb-3"></div>
+                                    <p class="text-muted">Loading your transactions...</p>
                                 </div>
                             </div>
                         </div>
@@ -255,26 +367,73 @@
         <!-- Test Dashboard -->
         <div id="testDashboard" class="row mt-4" style="display: none;">
             <div class="col-12">
-                <div class="card">
+                <div class="card test-dashboard-card">
                     <div class="card-header">
                         <h5 class="mb-0"><i class="fas fa-flask me-2"></i>Test Dashboard</h5>
                     </div>
                     <div class="card-body">
                         <div class="row">
                             <div class="col-md-6">
-                                <h6>Automated Test Cases</h6>
-                                <div class="d-grid gap-2">
-                                    <button class="btn btn-outline-success" onclick="runTestCase('TC01')">TC01: UPI PIN Validation</button>
-                                    <button class="btn btn-outline-success" onclick="runTestCase('TC04')">TC04: Invalid UPI ID Format</button>
-                                    <button class="btn btn-outline-success" onclick="runTestCase('TC05')">TC05: Min Boundary Amount</button>
-                                    <button class="btn btn-outline-success" onclick="runTestCase('TC06')">TC06: Max Boundary Amount</button>
-                                    <button class="btn btn-outline-success" onclick="runTestCase('TC11')">TC11: Session Timeout</button>
+                                <div class="test-cases-container">
+                                    <h6 class="mb-3"><i class="fas fa-vial me-2"></i>Automated Test Cases</h6>
+                                    <div class="test-buttons">
+                                        <button class="test-button" onclick="runTestCase('TC01')">
+                                            <div class="test-icon">
+                                                <i class="fas fa-key"></i>
+                                            </div>
+                                            <div class="test-info">
+                                                <span class="test-id">TC01</span>
+                                                <span class="test-name">UPI PIN Validation</span>
+                                            </div>
+                                        </button>
+                                        <button class="test-button" onclick="runTestCase('TC04')">
+                                            <div class="test-icon">
+                                                <i class="fas fa-at"></i>
+                                            </div>
+                                            <div class="test-info">
+                                                <span class="test-id">TC04</span>
+                                                <span class="test-name">Invalid UPI ID Format</span>
+                                            </div>
+                                        </button>
+                                        <button class="test-button" onclick="runTestCase('TC05')">
+                                            <div class="test-icon">
+                                                <i class="fas fa-arrow-down"></i>
+                                            </div>
+                                            <div class="test-info">
+                                                <span class="test-id">TC05</span>
+                                                <span class="test-name">Min Boundary Amount</span>
+                                            </div>
+                                        </button>
+                                        <button class="test-button" onclick="runTestCase('TC06')">
+                                            <div class="test-icon">
+                                                <i class="fas fa-arrow-up"></i>
+                                            </div>
+                                            <div class="test-info">
+                                                <span class="test-id">TC06</span>
+                                                <span class="test-name">Max Boundary Amount</span>
+                                            </div>
+                                        </button>
+                                        <button class="test-button" onclick="runTestCase('TC11')">
+                                            <div class="test-icon">
+                                                <i class="fas fa-clock"></i>
+                                            </div>
+                                            <div class="test-info">
+                                                <span class="test-id">TC11</span>
+                                                <span class="test-name">Session Timeout</span>
+                                            </div>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                             <div class="col-md-6">
-                                <h6>Test Results</h6>
-                                <div id="testResults">
-                                    <p class="text-muted">Run test cases to see results here.</p>
+                                <div class="test-results-container">
+                                    <h6 class="mb-3"><i class="fas fa-clipboard-check me-2"></i>Test Results</h6>
+                                    <div id="testResults" class="test-results-list">
+                                        <div class="test-placeholder">
+                                            <i class="fas fa-vial fa-2x mb-3 text-muted"></i>
+                                            <p class="text-muted">Run test cases to see results here.</p>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>

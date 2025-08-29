@@ -135,6 +135,7 @@ async function handleLogin(event) {
         });
         
         if (response.requiresOTP) {
+            hideLoading();
             showAlert('OTP sent to your registered mobile number', 'info');
             return;
         }
@@ -145,15 +146,30 @@ async function handleLogin(event) {
         localStorage.setItem('authToken', authToken);
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         
-        showAlert('Login successful!', 'success');
-        showDashboard();
-        loadUserProfile();
-        loadTransactions();
+        // Hide the loading overlay
+        hideLoading();
+        
+        // Show the transition animation
+        showDashboardTransition();
+        
+        // Wait for transition to complete before showing dashboard
+        setTimeout(() => {
+            showDashboard();
+            loadUserProfile();
+            loadTransactions();
+            showAlert('Login successful!', 'success');
+        }, 1600);
         
     } catch (error) {
-        showAlert(error.message, 'danger');
-    } finally {
         hideLoading();
+        showAlert(error.message, 'danger');
+        
+        // Shake the login form to indicate error
+        const loginForm = document.getElementById('loginForm');
+        loginForm.classList.add('shake');
+        setTimeout(() => {
+            loginForm.classList.remove('shake');
+        }, 500);
     }
 }
 
@@ -250,9 +266,16 @@ async function handleQRGeneration(event) {
         });
         
         document.getElementById('qrCodeImage').src = response.qrCode;
-        document.getElementById('qrInfo').textContent = 
-            `Amount: ₹${amount} | Merchant: ${merchantName}`;
+        document.getElementById('qrMerchantName').textContent = merchantName;
+        document.getElementById('qrAmountDisplay').textContent = `₹${amount.toLocaleString()}`;
+        document.getElementById('qrInfo').textContent = `Generated on ${new Date().toLocaleString()}`;
         document.getElementById('qrDisplay').style.display = 'block';
+        
+        // Add a subtle animation to the QR code to draw attention
+        const qrImage = document.getElementById('qrCodeImage');
+        qrImage.style.animation = 'pulse 2s infinite';
+        
+        showAlert(`QR code for ₹${amount} generated successfully!`, 'success');
         
     } catch (error) {
         showAlert(error.message, 'danger');
@@ -273,22 +296,68 @@ async function loadTransactions() {
     }
 }
 
+// Set amount in payment form
+function setAmount(amount) {
+    document.getElementById('amount').value = amount;
+}
+
+// Set amount in QR form
+function setQRAmount(amount) {
+    document.getElementById('qrAmount').value = amount;
+}
+
+// Filter transactions
+function filterTransactions(type) {
+    // Just reloads all transactions for now and highlights the selected button
+    loadTransactions();
+    
+    // Highlight the selected filter button
+    const buttons = document.querySelectorAll('.transaction-history-card .btn-sm');
+    buttons.forEach(btn => {
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-outline-primary', 'btn-outline-success', 'btn-outline-danger');
+    });
+    
+    // Find the clicked button and highlight it
+    const clickedButton = Array.from(buttons).find(btn => btn.textContent.toLowerCase().includes(type));
+    if (clickedButton) {
+        clickedButton.classList.remove('btn-outline-primary', 'btn-outline-success', 'btn-outline-danger');
+        clickedButton.classList.add('btn-primary');
+    }
+}
+
 // Display transactions
 function displayTransactions(transactions) {
     const container = document.getElementById('transactionsList');
     
     if (!transactions || transactions.length === 0) {
-        container.innerHTML = '<div class="text-center text-muted">No transactions found</div>';
+        container.innerHTML = `
+            <div class="text-center py-4">
+                <i class="fas fa-receipt fa-3x text-muted mb-3"></i>
+                <p class="text-muted">No transactions found</p>
+            </div>
+        `;
         return;
     }
     
-    const transactionHTML = transactions.map(transaction => {
+    const transactionHTML = transactions.map((transaction, index) => {
         const isCredit = transaction.toUserId === currentUser.id;
         const statusClass = transaction.status === 'SUCCESS' ? 'success' : 
                            transaction.status === 'FAILED' ? 'failed' : 'pending';
         
+        // Format date nicely
+        const txDate = new Date(transaction.createdAt);
+        const formattedDate = txDate.toLocaleDateString();
+        const formattedTime = txDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        
+        // Get appropriate icon based on transaction type
+        const getTypeIcon = () => {
+            if (isCredit) return '<i class="fas fa-arrow-down"></i>';
+            return '<i class="fas fa-arrow-up"></i>';
+        };
+        
         return `
-            <div class="transaction-item transaction-${statusClass}">
+            <div class="transaction-item transaction-${statusClass}" style="animation-delay: ${index * 0.05}s">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <h6 class="mb-1">
@@ -296,18 +365,20 @@ function displayTransactions(transactions) {
                             ${isCredit ? (transaction.fromUpiId || 'Unknown') : transaction.toUpiId}
                         </h6>
                         <p class="mb-1 transaction-meta">
+                            <i class="fas fa-comment-alt"></i>
                             ${transaction.description || 'No description'}
                         </p>
-                        <small class="text-muted">
-                            ${new Date(transaction.createdAt).toLocaleString()}
-                        </small>
+                        <div class="transaction-meta">
+                            <i class="far fa-clock"></i>
+                            ${formattedDate} at ${formattedTime}
+                        </div>
                     </div>
                     <div class="text-end">
                         <div class="amount-display ${isCredit ? 'amount-credit' : 'amount-debit'}">
                             ${isCredit ? '+' : '-'}₹${transaction.amount.toLocaleString()}
                         </div>
                         <span class="status-badge badge bg-${statusClass === 'success' ? 'success' : statusClass === 'failed' ? 'danger' : 'warning'}">
-                            ${transaction.status}
+                            ${getTypeIcon()} ${transaction.status}
                         </span>
                     </div>
                 </div>
@@ -370,13 +441,71 @@ function getAlertIcon(type) {
 
 // Loading state
 function showLoading() {
-    document.body.style.opacity = '0.8';
-    document.body.style.pointerEvents = 'none';
+    // Create loading overlay if it doesn't exist
+    let loadingOverlay = document.getElementById('loadingOverlay');
+    if (!loadingOverlay) {
+        loadingOverlay = document.createElement('div');
+        loadingOverlay.id = 'loadingOverlay';
+        loadingOverlay.innerHTML = `
+            <div class="loading-content">
+                <div class="loading-spinner-large"></div>
+                <p class="loading-text">Processing...</p>
+            </div>
+        `;
+        document.body.appendChild(loadingOverlay);
+    }
+    
+    // Show the overlay
+    loadingOverlay.style.display = 'flex';
+    
+    // Apply body styles
+    document.body.style.overflow = 'hidden';
 }
 
 function hideLoading() {
-    document.body.style.opacity = '1';
-    document.body.style.pointerEvents = 'auto';
+    // Hide the overlay
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    if (loadingOverlay) {
+        loadingOverlay.style.display = 'none';
+    }
+    
+    // Restore body styles
+    document.body.style.overflow = '';
+}
+
+// Show a loading animation for dashboard transition
+function showDashboardTransition() {
+    const transitionOverlay = document.createElement('div');
+    transitionOverlay.id = 'dashboardTransition';
+    transitionOverlay.className = 'transition-overlay';
+    
+    transitionOverlay.innerHTML = `
+        <div class="transition-content">
+            <div class="app-logo">
+                <i class="fas fa-mobile-alt"></i>
+            </div>
+            <h2 class="welcome-message">Welcome, ${currentUser.name || 'User'}</h2>
+            <div class="loading-bar">
+                <div class="loading-progress"></div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(transitionOverlay);
+    
+    // Animate the progress bar
+    setTimeout(() => {
+        const progressBar = document.querySelector('.loading-progress');
+        progressBar.style.width = '100%';
+    }, 100);
+    
+    // Remove the overlay after animation
+    setTimeout(() => {
+        transitionOverlay.classList.add('fade-out');
+        setTimeout(() => {
+            document.body.removeChild(transitionOverlay);
+        }, 500);
+    }, 1500);
 }
 
 // Test case execution
@@ -398,7 +527,24 @@ async function runTestCase(testId) {
 // Test case implementations
 async function testUPIPinValidation() {
     const testResults = document.getElementById('testResults');
-    testResults.innerHTML += '<div class="test-result">Running TC01: UPI PIN Validation...</div>';
+    
+    // Clear placeholder if it exists
+    const placeholder = document.querySelector('.test-placeholder');
+    if (placeholder) placeholder.remove();
+    
+    // Add running indicator
+    const runningId = 'running_' + Date.now();
+    testResults.innerHTML = `
+        <div id="${runningId}" class="test-result">
+            <div class="d-flex align-items-center">
+                <div class="loading-spinner me-3"></div>
+                <div>
+                    <h6 class="mb-1">Running TC01: UPI PIN Validation</h6>
+                    <small class="text-muted">Testing invalid PIN rejection...</small>
+                </div>
+            </div>
+        </div>
+    ` + testResults.innerHTML;
     
     try {
         // Test with incorrect PIN
@@ -413,12 +559,47 @@ async function testUPIPinValidation() {
         });
         
         // Should not reach here
-        testResults.innerHTML += '<div class="test-result failed">TC01 FAILED: Invalid PIN accepted</div>';
+        document.getElementById(runningId).remove();
+        testResults.innerHTML = `
+            <div class="test-result failed">
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-times-circle fa-2x me-3 text-danger"></i>
+                    <div>
+                        <h6 class="mb-1">TC01 FAILED</h6>
+                        <p class="mb-0">Invalid PIN was accepted by the system</p>
+                        <small class="text-muted">Expected: PIN rejection | Actual: PIN accepted</small>
+                    </div>
+                </div>
+            </div>
+        ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
     } catch (error) {
+        document.getElementById(runningId).remove();
         if (error.message.includes('Invalid PIN')) {
-            testResults.innerHTML += '<div class="test-result passed">TC01 PASSED: Invalid PIN correctly rejected</div>';
+            testResults.innerHTML = `
+                <div class="test-result passed">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-check-circle fa-2x me-3 text-success"></i>
+                        <div>
+                            <h6 class="mb-1">TC01 PASSED</h6>
+                            <p class="mb-0">Invalid PIN correctly rejected</p>
+                            <small class="text-muted">Expected: PIN rejection | Actual: "${error.message}"</small>
+                        </div>
+                    </div>
+                </div>
+            ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
         } else {
-            testResults.innerHTML += '<div class="test-result failed">TC01 FAILED: Unexpected error: ' + error.message + '</div>';
+            testResults.innerHTML = `
+                <div class="test-result failed">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-exclamation-triangle fa-2x me-3 text-warning"></i>
+                        <div>
+                            <h6 class="mb-1">TC01 FAILED</h6>
+                            <p class="mb-0">Unexpected error occurred</p>
+                            <small class="text-muted">${error.message}</small>
+                        </div>
+                    </div>
+                </div>
+            ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
         }
     }
 }
