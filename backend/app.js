@@ -109,44 +109,40 @@ app.post('/api/register', async (req, res) => {
       return res.status(409).json({ error: 'User already exists' });
     }
 
+    const existingEmail = await db.getUserByEmail(email);
+    if (existingEmail) {
+      return res.status(409).json({ error: 'Email already exists' });
+    }
+
     // Hash PIN
     const hashedPin = await bcrypt.hash(pin, 10);
     
     // Create user
-    const userId = uuidv4();
-    const user = {
-      id: userId,
+    const user = await db.createUser({
       name,
       phone,
       email,
-      pin: hashedPin,
-      deviceId,
-      createdAt: new Date().toISOString(),
-      isLocked: false,
-      pinAttempts: 0
-    };
-
-    await db.createUser(user);
+      pin_hash: hashedPin,
+      device_id: deviceId
+    });
     
     // Create default UPI ID
     const upiId = `${phone}@simulator`;
     await db.createUPIId({
-      id: uuidv4(),
-      userId,
-      upiId,
-      isDefault: true,
-      createdAt: new Date().toISOString()
+      user_id: user.id,
+      upi_id: upiId,
+      is_default: true
     });
 
     // Create default bank account
     await db.createBankAccount({
-      id: uuidv4(),
-      userId,
-      accountNumber: `ACC${phone}${Math.floor(Math.random() * 1000)}`,
+      user_id: user.id,
+      account_number: `ACC${phone}${Math.floor(Math.random() * 1000)}`,
       ifsc: 'SIMU0000001',
-      bankName: 'Simulator Bank',
+      bank_name: 'Simulator Bank',
+      account_holder_name: name,
       balance: 10000, // Default balance
-      createdAt: new Date().toISOString()
+      is_primary: true
     });
 
     logger.info(`User registered: ${phone}`);
@@ -156,6 +152,9 @@ app.post('/api/register', async (req, res) => {
     });
   } catch (error) {
     logger.error('Registration error:', error);
+    if (error.code === '23505') { // Unique constraint violation
+      return res.status(409).json({ error: 'User or email already exists' });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -170,12 +169,12 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    if (user.isLocked) {
+    if (user.is_locked) {
       return res.status(423).json({ error: 'Account locked due to multiple failed attempts' });
     }
 
     // Check device binding
-    if (user.deviceId !== deviceId) {
+    if (user.device_id !== deviceId) {
       // Simulate OTP requirement for new device
       logger.info(`New device login attempt for user: ${phone}`);
       return res.status(202).json({ 
@@ -185,25 +184,26 @@ app.post('/api/login', async (req, res) => {
     }
 
     // Verify PIN
-    const isValidPin = await bcrypt.compare(pin, user.pin);
+    const isValidPin = await bcrypt.compare(pin, user.pin_hash);
     if (!isValidPin) {
-      user.pinAttempts = (user.pinAttempts || 0) + 1;
-      if (user.pinAttempts >= 3) {
-        user.isLocked = true;
-        await db.updateUser(user);
+      const pinAttempts = (user.pin_attempts || 0) + 1;
+      if (pinAttempts >= 3) {
+        await db.lockUser(user.id);
         logger.warn(`Account locked for user: ${phone}`);
         return res.status(423).json({ error: 'Account locked due to multiple failed attempts' });
       }
-      await db.updateUser(user);
+      await db.updateUser(user.id, { pin_attempts: pinAttempts });
       return res.status(401).json({ 
         error: 'Invalid PIN',
-        attemptsRemaining: 3 - user.pinAttempts
+        attemptsRemaining: 3 - pinAttempts
       });
     }
 
-    // Reset pin attempts on successful login
-    user.pinAttempts = 0;
-    await db.updateUser(user);
+    // Reset pin attempts and update last login on successful login
+    await db.updateUser(user.id, { 
+      pin_attempts: 0,
+      last_login: new Date().toISOString()
+    });
 
     // Create session
     const sessionId = uuidv4();
@@ -248,10 +248,19 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
         phone: user.phone,
         email: user.email
       },
-      upiIds,
+      upiIds: upiIds.map(upi => ({
+        id: upi.id,
+        upiId: upi.upi_id,
+        isDefault: upi.is_default,
+        isActive: upi.is_active
+      })),
       bankAccounts: bankAccounts.map(acc => ({
-        ...acc,
-        accountNumber: acc.accountNumber.replace(/\d(?=\d{4})/g, '*') // Mask account number
+        id: acc.id,
+        accountNumber: acc.account_number.replace(/\d(?=\d{4})/g, '*'), // Mask account number
+        ifsc: acc.ifsc,
+        bankName: acc.bank_name,
+        balance: acc.balance,
+        isPrimary: acc.is_primary
       }))
     });
   } catch (error) {
@@ -297,38 +306,36 @@ app.post('/api/payment', authenticateToken, async (req, res) => {
     }
 
     // Verify PIN
-    const isValidPin = await bcrypt.compare(pin, sender.pin);
+    const isValidPin = await bcrypt.compare(pin, sender.pin_hash);
     if (!isValidPin) {
       return res.status(401).json({ error: 'Invalid PIN' });
     }
 
-    // Get sender's bank account
-    const senderAccounts = await db.getBankAccountsByUserId(sender.id);
-    if (senderAccounts.length === 0) {
+    // Get sender's primary bank account
+    const senderAccount = await db.getPrimaryBankAccount(sender.id);
+    if (!senderAccount) {
       return res.status(404).json({ error: 'No bank account found' });
     }
-    const senderAccount = senderAccounts[0];
 
     // Check balance
-    if (senderAccount.balance < amount) {
+    if (parseFloat(senderAccount.balance) < amount) {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
 
     // Check if recipient exists
-    const recipientUPI = await db.getUPIIdByUpiId(toUpiId);
-    if (!recipientUPI) {
-      // Create failed transaction and initiate reversal
-      const failedTransaction = {
-        id: uuidv4(),
-        fromUserId: sender.id,
-        toUpiId: toUpiId,
+    const recipient = await db.getUserByUpiId(toUpiId);
+    if (!recipient) {
+      // Create failed transaction
+      const transactionRef = `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
+      const failedTransaction = await db.createTransaction({
+        transaction_ref: transactionRef,
+        from_user_id: sender.id,
+        to_upi_id: toUpiId,
         amount: amount,
         description: description || '',
         status: 'FAILED',
-        failureReason: 'Invalid recipient UPI ID',
-        createdAt: new Date().toISOString()
-      };
-      await db.createTransaction(failedTransaction);
+        failure_reason: 'Invalid recipient UPI ID'
+      });
       
       logger.warn(`Failed transaction - Invalid UPI ID: ${toUpiId}`);
       return res.status(404).json({ 
@@ -338,40 +345,46 @@ app.post('/api/payment', authenticateToken, async (req, res) => {
       });
     }
 
-    const recipient = await db.getUserById(recipientUPI.userId);
-    const recipientAccounts = await db.getBankAccountsByUserId(recipient.id);
-    const recipientAccount = recipientAccounts[0];
+    const recipientAccount = await db.getPrimaryBankAccount(recipient.id);
+    if (!recipientAccount) {
+      return res.status(404).json({ error: 'Recipient bank account not found' });
+    }
+
+    // Generate transaction reference
+    const transactionRef = `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+    // Get sender's UPI ID
+    const senderUpiIds = await db.getUPIIdsByUserId(sender.id);
+    const senderUpiId = senderUpiIds.find(upi => upi.is_default)?.upi_id || senderUpiIds[0]?.upi_id;
 
     // Create transaction
-    const transactionId = uuidv4();
-    const transaction = {
-      id: transactionId,
-      fromUserId: sender.id,
-      toUserId: recipient.id,
-      fromUpiId: (await db.getUPIIdsByUserId(sender.id))[0].upiId,
-      toUpiId: toUpiId,
+    const transaction = await db.createTransaction({
+      transaction_ref: transactionRef,
+      from_user_id: sender.id,
+      to_user_id: recipient.id,
+      from_upi_id: senderUpiId,
+      to_upi_id: toUpiId,
       amount: amount,
       description: description || '',
-      status: 'SUCCESS',
-      createdAt: new Date().toISOString()
-    };
+      status: 'SUCCESS'
+    });
 
     // Update balances
-    senderAccount.balance -= amount;
-    recipientAccount.balance += amount;
+    const newSenderBalance = parseFloat(senderAccount.balance) - amount;
+    const newRecipientBalance = parseFloat(recipientAccount.balance) + amount;
 
-    await db.updateBankAccount(senderAccount);
-    await db.updateBankAccount(recipientAccount);
-    await db.createTransaction(transaction);
+    await db.updateBankAccountBalance(senderAccount.id, newSenderBalance);
+    await db.updateBankAccountBalance(recipientAccount.id, newRecipientBalance);
 
-    logger.info(`Transaction completed: ${transactionId}`);
+    logger.info(`Transaction completed: ${transaction.id}`);
     res.json({
-      transactionId,
+      transactionId: transaction.id,
+      transactionRef: transactionRef,
       status: 'SUCCESS',
       message: 'Payment completed successfully',
       amount,
       toUpiId,
-      timestamp: transaction.createdAt
+      timestamp: transaction.created_at
     });
   } catch (error) {
     logger.error('Payment error:', error);
@@ -432,30 +445,46 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
 });
 
 // Admin routes for testing
-app.get('/api/admin/users', (req, res) => {
-  // Simple admin route for testing - in production, this should be protected
-  db.getAllUsers().then(users => {
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const users = await db.getAllUsers(parseInt(page), parseInt(limit));
     res.json(users.map(user => ({
       id: user.id,
       name: user.name,
       phone: user.phone,
       email: user.email,
-      isLocked: user.isLocked,
-      createdAt: user.createdAt
+      is_locked: user.is_locked,
+      created_at: user.created_at,
+      upi_count: user.upi_count,
+      bank_account_count: user.bank_account_count,
+      transaction_count: user.transaction_count
     })));
-  }).catch(error => {
+  } catch (error) {
     logger.error('Admin users fetch error:', error);
     res.status(500).json({ error: 'Internal server error' });
-  });
+  }
 });
 
-app.get('/api/admin/transactions', (req, res) => {
-  db.getAllTransactions().then(transactions => {
+app.get('/api/admin/transactions', async (req, res) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+    const transactions = await db.getAllTransactions(parseInt(page), parseInt(limit));
     res.json(transactions);
-  }).catch(error => {
+  } catch (error) {
     logger.error('Admin transactions fetch error:', error);
     res.status(500).json({ error: 'Internal server error' });
-  });
+  }
+});
+
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    const stats = await db.getDashboardStats();
+    res.json(stats);
+  } catch (error) {
+    logger.error('Admin stats fetch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Reset database for testing

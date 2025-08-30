@@ -1,62 +1,82 @@
-require('dotenv').config();
 const { Pool } = require('pg');
+require('dotenv').config();
 
 class Database {
   constructor() {
     this.pool = new Pool({
-      host: process.env.PG_HOST || 'localhost',
-      port: process.env.PG_PORT || 5432,
-      database: process.env.PG_DATABASE || 'upi_payments_db',
-      user: process.env.PG_USER || 'upi_user',
+      user: process.env.PG_USER,
+      host: process.env.PG_HOST,
+      database: process.env.PG_DATABASE,
       password: process.env.PG_PASSWORD,
-      max: 10,
+      port: process.env.PG_PORT,
+      max: 20,
       idleTimeoutMillis: 30000,
+      
       connectionTimeoutMillis: 2000,
     });
-    this.initPostgres();
+
+    this.initDatabase();
   }
 
-  async initPostgres() {
+  async initDatabase() {
     try {
-      console.log('Connecting to PostgreSQL database...');
-      
-      // Test connection
-      await this.pool.query('SELECT NOW()');
-      console.log('PostgreSQL connection established successfully');
+      await this.createTables();
+      console.log('Database initialized successfully');
+    } catch (error) {
+      console.error('Database initialization error:', error);
+      throw error;
+    }
+  }
 
-      const schema = `
+  async createTables() {
+    const client = await this.pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+
+      // Users table - using UUID for all IDs consistently
+      await client.query(`
         CREATE TABLE IF NOT EXISTS users (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           name VARCHAR(255) NOT NULL,
-          phone VARCHAR(20) UNIQUE NOT NULL,
-          email VARCHAR(255) NOT NULL,
-          pin TEXT NOT NULL,
+          phone VARCHAR(15) UNIQUE NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          pin VARCHAR(255) NOT NULL,
           device_id VARCHAR(255) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           is_locked BOOLEAN DEFAULT FALSE,
           pin_attempts INTEGER DEFAULT 0,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // UPI IDs table
+      await client.query(`
         CREATE TABLE IF NOT EXISTS upi_ids (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           upi_id VARCHAR(255) UNIQUE NOT NULL,
           is_default BOOLEAN DEFAULT FALSE,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Bank accounts table
+      await client.query(`
         CREATE TABLE IF NOT EXISTS bank_accounts (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          account_number VARCHAR(20) NOT NULL,
-          ifsc VARCHAR(20) NOT NULL,
+          account_number VARCHAR(50) NOT NULL,
+          ifsc VARCHAR(11) NOT NULL,
           bank_name VARCHAR(255) NOT NULL,
           balance DECIMAL(15,2) DEFAULT 0.00,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Transactions table
+      await client.query(`
         CREATE TABLE IF NOT EXISTS transactions (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           from_user_id UUID REFERENCES users(id),
@@ -67,463 +87,404 @@ class Database {
           description TEXT,
           status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
           failure_reason TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS sessions (
+          transaction_ref VARCHAR(50) UNIQUE NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // User sessions table - fixed UUID consistency
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS user_sessions (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          session_token TEXT NOT NULL,
+          session_token VARCHAR(255) UNIQUE NOT NULL,
           device_id VARCHAR(255) NOT NULL,
-          expires_at TIMESTAMP NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
+          expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Test logs table
+      await client.query(`
         CREATE TABLE IF NOT EXISTS test_logs (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           test_case VARCHAR(255) NOT NULL,
-          input JSONB,
+          input_data JSONB,
           expected_result JSONB,
           actual_result JSONB,
           status VARCHAR(20) NOT NULL,
-          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+          execution_time INTEGER,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
-        -- Create indexes for better performance
-        CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
-        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-        CREATE INDEX IF NOT EXISTS idx_upi_ids_upi_id ON upi_ids(upi_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_from_user ON transactions(from_user_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_to_user ON transactions(to_user_id);
-        CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
-        CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);
-        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-      `;
-      
-      await this.pool.query(schema);
-      console.log('PostgreSQL tables and indexes created successfully');
-      
+      // Create indexes for better performance
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_upi_ids_upi_id ON upi_ids(upi_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_upi_ids_user_id ON upi_ids(user_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_bank_accounts_user_id ON bank_accounts(user_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_transactions_from_user ON transactions(from_user_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_transactions_to_user ON transactions(to_user_id)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_transactions_ref ON transactions(transaction_ref)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id)`);
+
+      await client.query('COMMIT');
+      console.log('Database tables created successfully');
     } catch (error) {
-      console.error('PostgreSQL initialization error:', error);
+      await client.query('ROLLBACK');
+      console.error('Database connection error:', error);
       throw error;
+    } finally {
+      client.release();
     }
   }
-
-  async seedTestDataPg() {
-    try {
-      // Check if users already exist
-      const { rows } = await this.pool.query('SELECT COUNT(*)::int AS count FROM users');
-      if (rows[0].count > 0) {
-        console.log('Test data already exists');
-        return;
-      }
-
-      console.log('Seeding test data for PostgreSQL...');
-
-      // Insert test users
-      await this.pool.query(`
-        INSERT INTO users (id, name, phone, email, pin, deviceId, createdAt, isLocked, pinAttempts)
-        VALUES 
-        ('user1', 'Test User 1', '9876543210', 'user1@test.com', '$2a$10$9AqGWxkR8xn7kPL3TjMGZ.VvJnWiJhQzXQYFR/qKWU9A.GDAEK98G', 'device1', $1, false, 0),
-        ('user2', 'Test User 2', '9876543211', 'user2@test.com', '$2a$10$9AqGWxkR8xn7kPL3TjMGZ.VvJnWiJhQzXQYFR/qKWU9A.GDAEK98G', 'device2', $1, false, 0)
-      `, [new Date().toISOString()]);
-
-      // Insert UPI IDs
-      await this.pool.query(`
-        INSERT INTO upi_ids (id, userId, upiId, isDefault, createdAt)
-        VALUES 
-        ('upi1', 'user1', '9876543210@simulator', true, $1),
-        ('upi2', 'user2', '9876543211@simulator', true, $1)
-      `, [new Date().toISOString()]);
-
-      // Insert bank accounts
-      await this.pool.query(`
-        INSERT INTO bank_accounts (id, userId, accountNumber, ifsc, bankName, balance, createdAt)
-        VALUES 
-        ('acc1', 'user1', 'ACC9876543210001', 'SIMU0000001', 'Simulator Bank', 50000, $1),
-        ('acc2', 'user2', 'ACC9876543211001', 'SIMU0000001', 'Simulator Bank', 75000, $1)
-      `, [new Date().toISOString()]);
-
-      console.log('PostgreSQL test data seeded successfully');
-    } catch (error) {
-      console.error('Error seeding PostgreSQL test data:', error);
-      throw error;
-    }
-  }
-
 
   // User operations
-  async createUser(user) {
-    if (dbClient === 'pg') {
-      const query = `
-        INSERT INTO users (id, name, phone, email, pin, deviceId, createdAt, isLocked, pinAttempts)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        user.id, user.name, user.phone, user.email, user.pin,
-        user.deviceId, user.createdAt, user.isLocked || false, user.pinAttempts || 0
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `INSERT INTO users (id, name, phone, email, pin, deviceId, createdAt, isLocked, pinAttempts)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        this.db.run(sql, [
-          user.id, user.name, user.phone, user.email, user.pin,
-          user.deviceId, user.createdAt, user.isLocked ? 1 : 0, user.pinAttempts || 0
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(user);
-        });
-      });
-    }
+  async createUser(userData) {
+    const query = `
+      INSERT INTO users (name, phone, email, pin, device_id)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `;
+    const values = [userData.name, userData.phone, userData.email, userData.pin, userData.deviceId];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
   }
 
   async getUserByPhone(phone) {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
-      return rows[0] || null;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.get('SELECT * FROM users WHERE phone = ?', [phone], (err, row) => {
-          if (err) reject(err);
-          else resolve(row || null);
-        });
-      });
-    }
+    const query = 'SELECT * FROM users WHERE phone = $1';
+    const result = await this.pool.query(query, [phone]);
+    return result.rows[0] || null;
+  }
+
+  async getUserByEmail(email) {
+    const query = 'SELECT * FROM users WHERE email = $1';
+    const result = await this.pool.query(query, [email]);
+    return result.rows[0] || null;
   }
 
   async getUserById(id) {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM users WHERE id = $1', [id]);
-      return rows[0] || null;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.get('SELECT * FROM users WHERE id = ?', [id], (err, row) => {
-          if (err) reject(err);
-          else resolve(row || null);
-        });
-      });
-    }
+    const query = 'SELECT * FROM users WHERE id = $1';
+    const result = await this.pool.query(query, [id]);
+    return result.rows[0] || null;
   }
 
-  async updateUser(user) {
-    if (dbClient === 'pg') {
-      const query = `
-        UPDATE users 
-        SET name = $1, email = $2, pin = $3, isLocked = $4, pinAttempts = $5
-        WHERE id = $6
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        user.name, user.email, user.pin, user.isLocked, user.pinAttempts, user.id
-      ]);
-      return rows[0];
-    } 
-    else {
-      return new Promise((resolve, reject) => {
-        const sql = `UPDATE users SET name = ?, email = ?, pin = ?, isLocked = ?, pinAttempts = ? WHERE id = ?`;
-        this.db.run(sql, [
-          user.name, user.email, user.pin, user.isLocked ? 1 : 0, user.pinAttempts, user.id
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(user);
-        });
-      });
-    }
+  async updateUser(userId, updateData) {
+    const fields = [];
+    const values = [];
+    let paramCount = 1;
+
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] !== undefined) {
+        fields.push(`${key} = $${paramCount}`);
+        values.push(updateData[key]);
+        paramCount++;
+      }
+    });
+
+    if (fields.length === 0) return null;
+
+    values.push(userId);
+    const query = `
+      UPDATE users 
+      SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $${paramCount}
+      RETURNING *
+    `;
+
+    const result = await this.pool.query(query, values);
+    return result.rows[0] || null;
   }
 
-  async getAllUsers() {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM users ORDER BY createdAt DESC');
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all('SELECT * FROM users ORDER BY createdAt DESC', [], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      });
-    }
+  async lockUser(userId) {
+    return this.updateUser(userId, { is_locked: true });
+  }
+
+  async unlockUser(userId) {
+    return this.updateUser(userId, { is_locked: false, pin_attempts: 0 });
   }
 
   // UPI ID operations
-  async createUPIId(upiId) {
-    if (dbClient === 'pg') {
-      const query = `
-        INSERT INTO upi_ids (id, userId, upiId, isDefault, createdAt)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        upiId.id, upiId.userId, upiId.upiId, upiId.isDefault, upiId.createdAt
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `INSERT INTO upi_ids (id, userId, upiId, isDefault, createdAt) VALUES (?, ?, ?, ?, ?)`;
-        this.db.run(sql, [
-          upiId.id, upiId.userId, upiId.upiId, upiId.isDefault ? 1 : 0, upiId.createdAt
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(upiId);
-        });
-      });
-    }
+  async createUPIId(upiData) {
+    const query = `
+      INSERT INTO upi_ids (user_id, upi_id, is_default)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `;
+    const values = [upiData.userId, upiData.upiId, upiData.isDefault || false];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
   }
 
   async getUPIIdsByUserId(userId) {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM upi_ids WHERE userId = $1', [userId]);
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all('SELECT * FROM upi_ids WHERE userId = ?', [userId], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      });
-    }
+    const query = 'SELECT * FROM upi_ids WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC';
+    const result = await this.pool.query(query, [userId]);
+    return result.rows;
   }
 
   async getUPIIdByUpiId(upiId) {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM upi_ids WHERE upiId = $1', [upiId]);
-      return rows[0] || null;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.get('SELECT * FROM upi_ids WHERE upiId = ?', [upiId], (err, row) => {
-          if (err) reject(err);
-          else resolve(row || null);
-        });
-      });
-    }
+    const query = 'SELECT * FROM upi_ids WHERE upi_id = $1';
+    const result = await this.pool.query(query, [upiId]);
+    return result.rows[0] || null;
+  }
+
+  async getUserByUpiId(upiId) {
+    const query = `
+      SELECT u.* FROM users u
+      JOIN upi_ids ui ON u.id = ui.user_id
+      WHERE ui.upi_id = $1
+    `;
+    const result = await this.pool.query(query, [upiId]);
+    return result.rows[0] || null;
   }
 
   // Bank account operations
-  async createBankAccount(account) {
-    if (dbClient === 'pg') {
-      const query = `
-        INSERT INTO bank_accounts (id, userId, accountNumber, ifsc, bankName, balance, createdAt)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        account.id, account.userId, account.accountNumber, account.ifsc,
-        account.bankName, account.balance, account.createdAt
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `INSERT INTO bank_accounts (id, userId, accountNumber, ifsc, bankName, balance, createdAt)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        this.db.run(sql, [
-          account.id, account.userId, account.accountNumber, account.ifsc,
-          account.bankName, account.balance, account.createdAt
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(account);
-        });
-      });
-    }
+  async createBankAccount(accountData) {
+    const query = `
+      INSERT INTO bank_accounts (user_id, account_number, ifsc, bank_name, balance)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `;
+    const values = [
+      accountData.userId,
+      accountData.accountNumber,
+      accountData.ifsc,
+      accountData.bankName,
+      accountData.balance || 0
+    ];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
   }
 
   async getBankAccountsByUserId(userId) {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM bank_accounts WHERE userId = $1', [userId]);
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all('SELECT * FROM bank_accounts WHERE userId = ?', [userId], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      });
-    }
+    const query = 'SELECT * FROM bank_accounts WHERE user_id = $1 ORDER BY created_at ASC';
+    const result = await this.pool.query(query, [userId]);
+    return result.rows;
   }
 
-  async updateBankAccount(account) {
-    if (dbClient === 'pg') {
-      const query = `
-        UPDATE bank_accounts 
-        SET accountNumber = $1, ifsc = $2, bankName = $3, balance = $4
-        WHERE id = $5
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        account.accountNumber, account.ifsc, account.bankName, account.balance, account.id
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `UPDATE bank_accounts SET accountNumber = ?, ifsc = ?, bankName = ?, balance = ? WHERE id = ?`;
-        this.db.run(sql, [
-          account.accountNumber, account.ifsc, account.bankName, account.balance, account.id
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(account);
-        });
-      });
-    }
+  async updateBankAccountBalance(accountId, newBalance) {
+    const query = `
+      UPDATE bank_accounts 
+      SET balance = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `;
+    const result = await this.pool.query(query, [newBalance, accountId]);
+    return result.rows[0] || null;
+  }
+
+  async getPrimaryBankAccount(userId) {
+    const query = 'SELECT * FROM bank_accounts WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1';
+    const result = await this.pool.query(query, [userId]);
+    return result.rows[0] || null;
   }
 
   // Transaction operations
-  async createTransaction(transaction) {
-    if (dbClient === 'pg') {
-      const query = `
-        INSERT INTO transactions (id, fromUserId, toUserId, fromUpiId, toUpiId, amount, description, status, failureReason, createdAt)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        transaction.id, transaction.fromUserId, transaction.toUserId, transaction.fromUpiId,
-        transaction.toUpiId, transaction.amount, transaction.description, transaction.status,
-        transaction.failureReason, transaction.createdAt
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `INSERT INTO transactions (id, fromUserId, toUserId, fromUpiId, toUpiId, amount, description, status, failureReason, createdAt)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        this.db.run(sql, [
-          transaction.id, transaction.fromUserId, transaction.toUserId, transaction.fromUpiId,
-          transaction.toUpiId, transaction.amount, transaction.description, transaction.status,
-          transaction.failureReason, transaction.createdAt
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(transaction);
-        });
-      });
-    }
+  async createTransaction(transactionData) {
+    const query = `
+      INSERT INTO transactions (
+        from_user_id, to_user_id, from_upi_id, to_upi_id, 
+        amount, description, status, transaction_ref
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *
+    `;
+    const values = [
+      transactionData.fromUserId,
+      transactionData.toUserId,
+      transactionData.fromUpiId,
+      transactionData.toUpiId,
+      transactionData.amount,
+      transactionData.description,
+      transactionData.status || 'PENDING',
+      transactionData.transactionRef
+    ];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
+  }
+
+  async updateTransactionStatus(transactionId, status, failureReason = null) {
+    const query = `
+      UPDATE transactions 
+      SET status = $1, failure_reason = $2
+      WHERE id = $3
+      RETURNING *
+    `;
+    const result = await this.pool.query(query, [status, failureReason, transactionId]);
+    return result.rows[0] || null;
   }
 
   async getTransactionsByUserId(userId, page = 1, limit = 10) {
     const offset = (page - 1) * limit;
-    
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query(`
-        SELECT * FROM transactions 
-        WHERE fromUserId = $1 OR toUserId = $1
-        ORDER BY createdAt DESC
-        LIMIT $2 OFFSET $3
-      `, [userId, limit, offset]);
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all(`
-          SELECT * FROM transactions 
-          WHERE fromUserId = ? OR toUserId = ?
-          ORDER BY createdAt DESC
-          LIMIT ? OFFSET ?
-        `, [userId, userId, limit, offset], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      }); 
-    }
+    const query = `
+      SELECT t.*, 
+             fu.name as from_user_name, fu.phone as from_phone,
+             tu.name as to_user_name, tu.phone as to_phone
+      FROM transactions t
+      LEFT JOIN users fu ON t.from_user_id = fu.id
+      LEFT JOIN users tu ON t.to_user_id = tu.id
+      WHERE t.from_user_id = $1 OR t.to_user_id = $1
+      ORDER BY t.created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+    const result = await this.pool.query(query, [userId, limit, offset]);
+    return result.rows;
   }
 
-  async getAllTransactions() {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM transactions ORDER BY createdAt DESC');
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all('SELECT * FROM transactions ORDER BY createdAt DESC', [], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      });
-    }
+  async getTransactionById(transactionId) {
+    const query = 'SELECT * FROM transactions WHERE id = $1';
+    const result = await this.pool.query(query, [transactionId]);
+    return result.rows[0] || null;
   }
 
-  // Test log operations
-  async logTestCase(testCase, input, expectedResult, actualResult, status) {
-    const testLog = {
-      id: require('uuid').v4(),
-      testCase,
-      input: JSON.stringify(input),
-      expectedResult: JSON.stringify(expectedResult),
-      actualResult: JSON.stringify(actualResult),
-      status,
-      timestamp: new Date().toISOString()
-    };
-
-    if (dbClient === 'pg') {
-      const query = `
-        INSERT INTO test_logs (id, testCase, input, expectedResult, actualResult, status, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `;
-      const { rows } = await this.pool.query(query, [
-        testLog.id, testLog.testCase, testLog.input, testLog.expectedResult,
-        testLog.actualResult, testLog.status, testLog.timestamp
-      ]);
-      return rows[0];
-    } else {
-      return new Promise((resolve, reject) => {
-        const sql = `INSERT INTO test_logs (id, testCase, input, expectedResult, actualResult, status, timestamp)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
-        this.db.run(sql, [
-          testLog.id, testLog.testCase, testLog.input, testLog.expectedResult,
-          testLog.actualResult, testLog.status, testLog.timestamp
-        ], function(err) {
-          if (err) reject(err);
-          else resolve(testLog);
-        });
-      });
-    }
+  async getTransactionByRef(transactionRef) {
+    const query = 'SELECT * FROM transactions WHERE transaction_ref = $1';
+    const result = await this.pool.query(query, [transactionRef]);
+    return result.rows[0] || null;
   }
 
-  async getTestLogs() {
-    if (dbClient === 'pg') {
-      const { rows } = await this.pool.query('SELECT * FROM test_logs ORDER BY timestamp DESC');
-      return rows;
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all('SELECT * FROM test_logs ORDER BY timestamp DESC', [], (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows || []);
-        });
-      }); 
-    }
+  // Session management
+  async createSession(sessionData) {
+    const query = `
+      INSERT INTO user_sessions (user_id, session_token, device_id, expires_at)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [
+      sessionData.userId,
+      sessionData.sessionToken,
+      sessionData.deviceId,
+      sessionData.expiresAt
+    ];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
   }
 
-  // Reset database
-  async reset() {
-    if (dbClient === 'pg') {
-      await this.pool.query(`
-        DROP TABLE IF EXISTS test_logs, transactions, bank_accounts, upi_ids, users CASCADE
-      `);
-      await this.initPostgres();
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.serialize(() => {
-          this.db.exec(`
-            DROP TABLE IF EXISTS test_logs;
-            DROP TABLE IF EXISTS transactions;
-            DROP TABLE IF EXISTS bank_accounts;
-            DROP TABLE IF EXISTS upi_ids;
-            DROP TABLE IF EXISTS users;
-          `, (err) => {
-            if (err) {
-              reject(err);
-            } else {
-              this.initSqlite();
-              resolve();
-            }
-          });
-        });
-      });
-    }
+  async getActiveSession(sessionToken) {
+    const query = `
+      SELECT s.*, u.name, u.phone, u.email 
+      FROM user_sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.session_token = $1 AND s.is_active = true AND s.expires_at > CURRENT_TIMESTAMP
+    `;
+    const result = await this.pool.query(query, [sessionToken]);
+    return result.rows[0] || null;
+  }
+
+  async invalidateSession(sessionToken) {
+    const query = `
+      UPDATE user_sessions 
+      SET is_active = false
+      WHERE session_token = $1
+      RETURNING *
+    `;
+    const result = await this.pool.query(query, [sessionToken]);
+    return result.rows[0] || null;
+  }
+
+  async invalidateAllUserSessions(userId) {
+    const query = `
+      UPDATE user_sessions 
+      SET is_active = false
+      WHERE user_id = $1
+      RETURNING count(*) as invalidated_sessions
+    `;
+    const result = await this.pool.query(query, [userId]);
+    return result.rows[0];
+  }
+
+  // Test logging
+  async logTestCase(testData) {
+    const query = `
+      INSERT INTO test_logs (test_case, input_data, expected_result, actual_result, status, execution_time)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `;
+    const values = [
+      testData.testCase,
+      JSON.stringify(testData.input),
+      JSON.stringify(testData.expectedResult),
+      JSON.stringify(testData.actualResult),
+      testData.status,
+      testData.executionTime || null
+    ];
+    const result = await this.pool.query(query, values);
+    return result.rows[0];
+  }
+
+  async getTestLogs(limit = 50) {
+    const query = 'SELECT * FROM test_logs ORDER BY created_at DESC LIMIT $1';
+    const result = await this.pool.query(query, [limit]);
+    return result.rows;
+  }
+
+  // Admin operations
+  async getAllUsers(page = 1, limit = 20) {
+    const offset = (page - 1) * limit;
+    const query = `
+      SELECT u.*, 
+             COUNT(t.id) as transaction_count,
+             COALESCE(SUM(CASE WHEN t.from_user_id = u.id THEN t.amount ELSE 0 END), 0) as total_sent,
+             COALESCE(SUM(CASE WHEN t.to_user_id = u.id THEN t.amount ELSE 0 END), 0) as total_received
+      FROM users u
+      LEFT JOIN transactions t ON (u.id = t.from_user_id OR u.id = t.to_user_id)
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
+    const result = await this.pool.query(query, [limit, offset]);
+    return result.rows;
+  }
+
+  async getAllTransactions(page = 1, limit = 50) {
+    const offset = (page - 1) * limit;
+    const query = `
+      SELECT t.*, 
+             fu.name as from_user_name, fu.phone as from_phone,
+             tu.name as to_user_name, tu.phone as to_phone
+      FROM transactions t
+      LEFT JOIN users fu ON t.from_user_id = fu.id
+      LEFT JOIN users tu ON t.to_user_id = tu.id
+      ORDER BY t.created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
+    const result = await this.pool.query(query, [limit, offset]);
+    return result.rows;
   }
 
   async close() {
-    if (dbClient === 'pg') {
-      await this.pool.end();
-    } else {
-      this.db.close();
+    await this.pool.end();
+  }
+
+  // Add this method to your Database class in database.js
+
+  async resetDatabase() {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // Drop all tables in correct order
+      await client.query('DROP TABLE IF EXISTS user_sessions CASCADE');
+      await client.query('DROP TABLE IF EXISTS test_logs CASCADE');
+      await client.query('DROP TABLE IF EXISTS transactions CASCADE');
+      await client.query('DROP TABLE IF EXISTS bank_accounts CASCADE');
+      await client.query('DROP TABLE IF EXISTS upi_ids CASCADE');
+      await client.query('DROP TABLE IF EXISTS users CASCADE');
+      
+      await client.query('COMMIT');
+      console.log('Database tables dropped successfully');
+      
+      // Recreate tables
+      await this.createTables();
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }

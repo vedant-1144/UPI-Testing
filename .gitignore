@@ -22,6 +22,10 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Database files (if using file-based DB)
+# Database files
 *.db
 *.sqlite
+*.sql.backup
+
+# PostgreSQL data directory (if local)
+pgdata/

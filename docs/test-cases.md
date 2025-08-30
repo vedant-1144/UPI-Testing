@@ -5,7 +5,7 @@ This document outlines the comprehensive test cases for the UPI Payment Simulati
 
 ## Test Environment Setup
 - **Backend:** Node.js with Express
-- **Database:** SQLite (in-memory for testing)
+- **Database:** PostgreSQL (relational database)
 - **Frontend:** HTML5, CSS3, JavaScript
 - **Testing Framework:** Jest with Supertest
 

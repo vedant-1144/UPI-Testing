@@ -5,6 +5,23 @@ describe('UPI Payment Simulator API Tests', () => {
   let authToken;
   let testUserId;
 
+  // Clean up database before and after tests
+  beforeAll(async () => {
+    // Wait for database to be ready
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  });
+
+  afterAll(async () => {
+    // Clean up test data
+    try {
+      await request(app)
+        .post('/api/admin/reset')
+        .expect(200);
+    } catch (error) {
+      console.log('Cleanup warning:', error.message);
+    }
+  });
+
   // Test user registration
   describe('POST /api/register', () => {
     test('TC01: Should register a new user successfully', async () => {

@@ -36,6 +36,7 @@ upi-payment-simulator/
 
 - Node.js (v14 or higher)
 - npm
+- PostgreSQL (v12 or higher)
 
 ### Installation
 
@@ -45,13 +46,29 @@ upi-payment-simulator/
    cd upi-payment-simulator
    ```
 
-2. Install backend dependencies
+2. Set up PostgreSQL database
+   ```bash
+   # Create database and user
+   sudo -u postgres psql
+   CREATE DATABASE upi_payments_db;
+   CREATE USER upi_user WITH PASSWORD '1234';
+   GRANT ALL PRIVILEGES ON DATABASE upi_payments_db TO upi_user;
+   \q
+   ```
+
+3. Configure environment variables
    ```bash
    cd backend
+   cp .env.example .env
+   # Edit .env with your PostgreSQL settings
+   ```
+
+4. Install backend dependencies
+   ```bash
    npm install
    ```
 
-3. Install frontend dependencies
+5. Install frontend dependencies
    ```bash
    cd ../frontend
    npm install
@@ -65,6 +82,7 @@ upi-payment-simulator/
    npm start
    ```
    The backend will run on http://localhost:8080
+   Note: Database tables will be created automatically on first run
 
 2. Start the frontend server
    ```bash
@@ -75,19 +93,39 @@ upi-payment-simulator/
 
 3. Open your browser and navigate to http://localhost:8000
 
-### Test Accounts
+### Database Management
 
-For testing purposes, the following accounts are pre-configured:
+To view data in PostgreSQL:
+```bash
+# Connect to database
+psql -h localhost -U upi_user -d upi_payments_db
 
-- User 1:
-  - Phone: 9876543210
-  - PIN: password
-  - Balance: ₹50,000
+# List all tables
+\dt
 
-- User 2:
-  - Phone: 9876543211
-  - PIN: password
-  - Balance: ₹75,000
+# View users
+SELECT * FROM users;
+
+# View transactions
+SELECT * FROM transactions;
+```
+
+### Creating Test Users
+
+The application now requires manual user registration. You can:
+1. Use the registration form on the frontend
+2. Use the API directly:
+   ```bash
+   curl -X POST http://localhost:8080/api/register \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Test User",
+       "phone": "9876543210",
+       "email": "test@example.com",
+       "pin": "1234",
+       "deviceId": "device123"
+     }'
+   ```
 
 ## Running Tests
 
