@@ -39,7 +39,40 @@ function setupEventListeners() {
     document.getElementById('registrationForm').addEventListener('submit', handleRegistration);
     
     // Payment form
-    document.getElementById('paymentForm').addEventListener('submit', handlePayment);
+    document.getElementById('paymentForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const formData = {
+            name: document.getElementById('name').value,
+            email: document.getElementById('email').value,
+            phone: document.getElementById('phone').value,
+            amount: document.getElementById('amount').value,
+            upiId: document.getElementById('upiId').value
+        };
+        
+        try {
+            // Create transaction
+            const response = await fetch('/api/create-transaction', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(formData)
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                // Show payment simulation UI
+                simulatePayment(result.referenceId);
+            } else {
+                alert('Failed to process payment: ' + result.message);
+            }
+        } catch (error) {
+            console.error('Payment error:', error);
+            alert('An error occurred while processing your payment.');
+        }
+    });
     
     // QR form
     document.getElementById('qrForm').addEventListener('submit', handleQRGeneration);

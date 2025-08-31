@@ -427,10 +427,12 @@ class Database {
     const offset = (page - 1) * limit;
     const query = `
       SELECT u.*, 
-             COUNT(t.id) as transaction_count,
-             COALESCE(SUM(CASE WHEN t.from_user_id = u.id THEN t.amount ELSE 0 END), 0) as total_sent,
-             COALESCE(SUM(CASE WHEN t.to_user_id = u.id THEN t.amount ELSE 0 END), 0) as total_received
+             COUNT(DISTINCT ui.id) as upi_count,
+             COUNT(DISTINCT ba.id) as bank_account_count,
+             COUNT(DISTINCT t.id) as transaction_count
       FROM users u
+      LEFT JOIN upi_ids ui ON u.id = ui.user_id
+      LEFT JOIN bank_accounts ba ON u.id = ba.user_id
       LEFT JOIN transactions t ON (u.id = t.from_user_id OR u.id = t.to_user_id)
       GROUP BY u.id
       ORDER BY u.created_at DESC
@@ -456,18 +458,29 @@ class Database {
     return result.rows;
   }
 
-  async close() {
-    await this.pool.end();
+  async getDashboardStats() {
+    const userCountQuery = 'SELECT COUNT(*) as total_users FROM users';
+    const transactionCountQuery = 'SELECT COUNT(*) as total_transactions FROM transactions';
+    const totalVolumeQuery = 'SELECT COALESCE(SUM(amount), 0) as total_volume FROM transactions WHERE status = \'SUCCESS\'';
+    
+    const [userResult, transactionResult, volumeResult] = await Promise.all([
+      this.pool.query(userCountQuery),
+      this.pool.query(transactionCountQuery),
+      this.pool.query(totalVolumeQuery)
+    ]);
+
+    return {
+      totalUsers: parseInt(userResult.rows[0].total_users),
+      totalTransactions: parseInt(transactionResult.rows[0].total_transactions),
+      totalVolume: parseFloat(volumeResult.rows[0].total_volume)
+    };
   }
 
-  // Add this method to your Database class in database.js
-
-  async resetDatabase() {
+  async reset() {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       
-      // Drop all tables in correct order
       await client.query('DROP TABLE IF EXISTS user_sessions CASCADE');
       await client.query('DROP TABLE IF EXISTS test_logs CASCADE');
       await client.query('DROP TABLE IF EXISTS transactions CASCADE');
@@ -478,7 +491,6 @@ class Database {
       await client.query('COMMIT');
       console.log('Database tables dropped successfully');
       
-      // Recreate tables
       await this.createTables();
     } catch (error) {
       await client.query('ROLLBACK');
