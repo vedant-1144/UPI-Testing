@@ -3,6 +3,7 @@ class PayEaseApp {
     constructor() {
         this.currentUser = null;
         this.apiBaseUrl = 'http://localhost:3000';
+        this.authToken = null; // Add token for authentication
         this.init();
     }
 
@@ -23,14 +24,36 @@ class PayEaseApp {
     }
 
     // Check if user is logged in
-    checkAuthStatus() {
-        const savedUser = localStorage.getItem('payease_user');
-        if (savedUser) {
-            this.currentUser = JSON.parse(savedUser);
-            this.showDashboard();
-        } else {
-            this.showLogin();
+    async checkAuthStatus() {
+        // Get token from session storage (safer than localStorage for auth)
+        const token = sessionStorage.getItem('payease_auth_token');
+        
+        if (token) {
+            this.authToken = token;
+            try {
+                // Validate token with backend
+                const response = await fetch(`${this.apiBaseUrl}/api/auth/validate-token`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    this.currentUser = data.user;
+                    this.showDashboard();
+                    return;
+                }
+            } catch (error) {
+                console.error('Token validation error:', error);
+                // Clear invalid token
+                sessionStorage.removeItem('payease_auth_token');
+            }
         }
+        
+        // If no token or invalid token, show login
+        this.showLogin();
     }
 
     // Setup Event Listeners
@@ -117,7 +140,6 @@ class PayEaseApp {
     async handleLogin(e) {
         e.preventDefault();
         const form = e.target;
-        const formData = new FormData(form);
         
         const phone = document.getElementById('loginPhone').value;
         const pin = document.getElementById('loginPin').value;
@@ -125,36 +147,40 @@ class PayEaseApp {
         this.showButtonLoading(form.querySelector('button[type="submit"]'));
 
         try {
-            // Demo authentication - replace with real API call
-            if (this.validateDemoLogin(phone, pin)) {
-                const user = {
-                    name: phone === '9876543210' ? 'John Doe' : 'Jane Smith',
+            // Call backend API for login
+            const response = await fetch(`${this.apiBaseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
                     phone: phone,
-                    email: phone === '9876543210' ? 'john@example.com' : 'jane@example.com',
-                    balance: 10000
-                };
-                
-                this.currentUser = user;
-                localStorage.setItem('payease_user', JSON.stringify(user));
-                
+                    pin: pin
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Login failed');
+            }
+
+            if (data.success) {
+                this.currentUser = data.user;
+                localStorage.setItem('payease_user', JSON.stringify(data.user));
+                sessionStorage.setItem('payease_auth_token', data.token); // Store token in session
+
                 this.showToast('Login successful!', 'success');
                 this.showDashboard();
             } else {
-                throw new Error('Invalid credentials');
+                throw new Error(data.message || 'Login failed');
             }
         } catch (error) {
+            console.error('Login error:', error);
             this.showToast('Login failed: ' + error.message, 'error');
         } finally {
             this.hideButtonLoading(form.querySelector('button[type="submit"]'));
         }
-    }
-
-    validateDemoLogin(phone, pin) {
-        const demoAccounts = [
-            { phone: '9876543210', pin: '1234' },
-            { phone: '9876543211', pin: '1234' }
-        ];
-        return demoAccounts.some(account => account.phone === phone && account.pin === pin);
     }
 
     async handleSignup(e) {
@@ -169,20 +195,38 @@ class PayEaseApp {
         this.showButtonLoading(form.querySelector('button[type="submit"]'));
 
         try {
-            // Demo signup - replace with real API call
-            const user = {
-                name: name,
-                phone: phone,
-                email: email,
-                balance: 5000 // Starting balance for new users
-            };
-            
-            this.currentUser = user;
-            localStorage.setItem('payease_user', JSON.stringify(user));
-            
-            this.showToast('Account created successfully!', 'success');
-            this.showDashboard();
+            // Call backend API for registration
+            const response = await fetch(`${this.apiBaseUrl}/api/auth/register`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: name,
+                    email: email,
+                    phone: phone,
+                    pin: pin
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Registration failed');
+            }
+
+            if (data.success) {
+                this.currentUser = data.user;
+                localStorage.setItem('payease_user', JSON.stringify(data.user));
+                sessionStorage.setItem('payease_auth_token', data.token); // Store token in session
+
+                this.showToast('Account created successfully!', 'success');
+                this.showDashboard();
+            } else {
+                throw new Error(data.message || 'Registration failed');
+            }
         } catch (error) {
+            console.error('Registration error:', error);
             this.showToast('Signup failed: ' + error.message, 'error');
         } finally {
             this.hideButtonLoading(form.querySelector('button[type="submit"]'));
@@ -199,52 +243,46 @@ class PayEaseApp {
         const description = document.getElementById('description').value;
         const pin = document.getElementById('paymentPin').value;
 
-        // Validate PIN for demo
-        if (!this.validatePin(pin)) {
-            this.showToast('Invalid PIN', 'error');
-            return;
-        }
-
         this.showButtonLoading(form.querySelector('button[type="submit"]'));
 
         try {
-            // Simulate payment processing
-            await this.simulatePayment();
-            
-            // Create transaction record
-            const transaction = {
-                id: this.generateTransactionId(),
-                toUpiId: toUpiId,
-                amount: amount,
-                description: description,
-                status: Math.random() > 0.1 ? 'completed' : 'failed', // 90% success rate
-                timestamp: new Date().toISOString(),
-                type: 'sent'
-            };
+            const response = await fetch(`${this.apiBaseUrl}/api/transactions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.authToken}`
+                },
+                body: JSON.stringify({
+                    toUpiId: toUpiId,
+                    amount: amount,
+                    description: description,
+                    pin: pin
+                })
+            });
 
-            // Save transaction
-            this.saveTransaction(transaction);
-            
-            // Update balance if successful
-            if (transaction.status === 'completed') {
-                this.currentUser.balance -= amount;
-                localStorage.setItem('payease_user', JSON.stringify(this.currentUser));
-                this.updateUserInfo();
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Payment failed');
             }
 
-            // Hide payment modal
-            this.hidePaymentForm();
-            
-            // Show result animation
-            if (transaction.status === 'completed') {
-                this.showSuccessModal(transaction);
+            if (data.success) {
+                this.hidePaymentForm();
+                if (data.transaction.status === 'completed') {
+                    this.showSuccessModal(data.transaction);
+                } else {
+                    this.showFailureModal(data.transaction);
+                }
+                this.loadTransactions();
+                
+                // Update user balance if returned by API
+                if (data.user && data.user.balance !== undefined) {
+                    this.currentUser.balance = data.user.balance;
+                    this.updateUserInfo();
+                }
             } else {
-                this.showFailureModal(transaction);
+                throw new Error(data.message || 'Payment failed');
             }
-
-            // Reload transactions
-            this.loadTransactions();
-            
         } catch (error) {
             this.showToast('Payment failed: ' + error.message, 'error');
         } finally {
@@ -252,37 +290,35 @@ class PayEaseApp {
         }
     }
 
-    validatePin(pin) {
-        return pin === '1234'; // Demo PIN validation
-    }
-
-    async simulatePayment() {
-        return new Promise(resolve => {
-            setTimeout(resolve, 2000); // Simulate 2 second processing
-        });
-    }
-
-    generateTransactionId() {
-        return 'UPI' + Date.now() + Math.floor(Math.random() * 1000);
-    }
-
     // Transaction management
-    saveTransaction(transaction) {
-        let transactions = JSON.parse(localStorage.getItem('payease_transactions')) || [];
-        transactions.unshift(transaction);
-        localStorage.setItem('payease_transactions', JSON.stringify(transactions));
-    }
-
-    loadTransactions() {
-        const transactions = JSON.parse(localStorage.getItem('payease_transactions')) || [];
-        this.displayTransactions(transactions);
+    async loadTransactions() {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/transactions?userId=${this.currentUser.id}`, {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                this.displayTransactions(data.transactions);
+            } else {
+                this.displayTransactions([]);
+                console.error('Error loading transactions:', data.message);
+            }
+        } catch (error) {
+            console.error('Failed to load transactions:', error);
+            this.displayTransactions([]);
+            this.showToast('Failed to load transactions', 'error');
+        }
     }
 
     displayTransactions(transactions) {
         const transactionsList = document.getElementById('transactionsList');
         if (!transactionsList) return;
 
-        if (transactions.length === 0) {
+        if (!transactions || transactions.length === 0) {
             transactionsList.innerHTML = `
                 <div class="text-center py-4">
                     <i class="fas fa-history fa-2x text-muted mb-3"></i>
@@ -295,26 +331,33 @@ class PayEaseApp {
             return;
         }
 
-        transactionsList.innerHTML = transactions.slice(0, 10).map(transaction => `
-            <div class="transaction-item">
-                <div class="transaction-icon ${transaction.type}">
-                    <i class="fas ${transaction.type === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
-                </div>
-                <div class="transaction-details">
-                    <h6>${transaction.type === 'sent' ? 'Sent to' : 'Received from'} ${transaction.toUpiId || 'Unknown'}</h6>
-                    <p class="text-muted mb-0">
-                        <small>${this.formatDate(transaction.timestamp)}</small>
-                        ${transaction.description ? `<br><small>${transaction.description}</small>` : ''}
-                    </p>
-                </div>
-                <div class="transaction-amount">
-                    <div class="amount ${transaction.type === 'sent' ? 'text-danger' : 'text-success'}">
-                        ${transaction.type === 'sent' ? '-' : '+'}₹${transaction.amount.toFixed(2)}
+        transactionsList.innerHTML = transactions.slice(0, 10).map(transaction => {
+            // Determine if transaction is sent or received
+            const isSent = transaction.from_user_id === this.currentUser.id;
+            const type = isSent ? 'sent' : 'received';
+            const amount = parseFloat(transaction.amount);
+            
+            return `
+                <div class="transaction-item">
+                    <div class="transaction-icon ${type}">
+                        <i class="fas ${type === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
                     </div>
-                    <span class="status ${transaction.status}">${this.capitalizeFirst(transaction.status)}</span>
+                    <div class="transaction-details">
+                        <h6>${type === 'sent' ? 'Sent to' : 'Received from'} ${isSent ? transaction.to_upi_id : transaction.from_name || 'Unknown'}</h6>
+                        <p class="text-muted mb-0">
+                            <small>${this.formatDate(transaction.created_at)}</small>
+                            ${transaction.description ? `<br><small>${transaction.description}</small>` : ''}
+                        </p>
+                    </div>
+                    <div class="transaction-amount">
+                        <div class="amount ${type === 'sent' ? 'text-danger' : 'text-success'}">
+                            ${type === 'sent' ? '-' : '+'}₹${amount.toFixed(2)}
+                        </div>
+                        <span class="status ${transaction.status}">${this.capitalizeFirst(transaction.status)}</span>
+                    </div>
                 </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     }
 
     // UI Helpers
@@ -477,9 +520,19 @@ class PayEaseApp {
 
     // Logout
     handleLogout() {
-        localStorage.removeItem('payease_user');
-        localStorage.removeItem('payease_transactions');
+        // Clear session storage instead of localStorage
+        sessionStorage.removeItem('payease_auth_token');
         this.currentUser = null;
+        this.authToken = null;
+        
+        // Call logout endpoint to invalidate token on server
+        fetch(`${this.apiBaseUrl}/api/auth/logout`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.authToken}`
+            }
+        }).catch(error => console.error('Logout error:', error));
+        
         this.showLogin();
         this.showToast('Logged out successfully', 'info');
         
@@ -488,6 +541,25 @@ class PayEaseApp {
         const logoutBtn = document.getElementById('logoutBtn');
         if (userInfo) userInfo.style.display = 'none';
         if (logoutBtn) logoutBtn.style.display = 'none';
+    }
+
+    async refreshBalance() {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/user/balance`, {
+                headers: {
+                    'Authorization': `Bearer ${this.authToken}`
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.success && data.balance !== undefined) {
+                this.currentUser.balance = data.balance;
+                this.updateUserInfo();
+            }
+        } catch (error) {
+            console.error('Failed to refresh balance:', error);
+        }
     }
 }
 
@@ -518,6 +590,7 @@ function showQRCode() {
 
 function showHistory() {
     app.loadTransactions();
+    app.refreshBalance();
     app.showToast('Transaction history refreshed', 'info');
 }
 
@@ -545,40 +618,3 @@ let app;
 document.addEventListener('DOMContentLoaded', () => {
     app = new PayEaseApp();
 });
-
-// Backend API integration (when available)
-async function createTransaction(transactionData) {
-    try {
-        const response = await fetch('http://localhost:3000/api/transactions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(transactionData)
-        });
-        
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        
-        return await response.json();
-    } catch (error) {
-        console.error('Error creating transaction:', error);
-        throw error;
-    }
-}
-
-async function getTransactions() {
-    try {
-        const response = await fetch('http://localhost:3000/api/transactions');
-        
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching transactions:', error);
-        return [];
-    }
-}
