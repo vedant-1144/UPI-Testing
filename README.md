@@ -23,9 +23,6 @@ upi-payment-simulator/
 │   ├── app.js           # Frontend JavaScript
 │   ├── index.html       # Main HTML file
 │   └── styles.css       # CSS styles
-├── docs/                # Documentation
-│   ├── api-spec.json    # API specification
-│   └── test-cases.md    # Test cases documentation
 └── tests/               # Automated tests
     └── api.test.js      # API tests
 ```
@@ -59,7 +56,6 @@ upi-payment-simulator/
 3. Configure environment variables
    ```bash
    cd backend
-   cp .env.example .env
    # Edit .env with your PostgreSQL settings
    ```
 
