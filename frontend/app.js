@@ -24,36 +24,20 @@ class PayEaseApp {
     }
 
     // Check if user is logged in
-    async checkAuthStatus() {
-        // Get token from session storage (safer than localStorage for auth)
-        const token = sessionStorage.getItem('payease_auth_token');
-        
-        if (token) {
-            this.authToken = token;
+    checkAuthStatus() {
+        const savedUser = localStorage.getItem('payease_user');
+        if (savedUser) {
             try {
-                // Validate token with backend
-                const response = await fetch(`${this.apiBaseUrl}/api/auth/validate-token`, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-                
-                const data = await response.json();
-                if (data.success) {
-                    this.currentUser = data.user;
-                    this.showDashboard();
-                    return;
-                }
+                this.currentUser = JSON.parse(savedUser);
+                this.showDashboard();
             } catch (error) {
-                console.error('Token validation error:', error);
-                // Clear invalid token
-                sessionStorage.removeItem('payease_auth_token');
+                console.error('Error parsing saved user:', error);
+                localStorage.removeItem('payease_user');
+                this.showLogin();
             }
+        } else {
+            this.showLogin();
         }
-        
-        // If no token or invalid token, show login
-        this.showLogin();
     }
 
     // Setup Event Listeners
@@ -168,8 +152,7 @@ class PayEaseApp {
             if (data.success) {
                 this.currentUser = data.user;
                 localStorage.setItem('payease_user', JSON.stringify(data.user));
-                sessionStorage.setItem('payease_auth_token', data.token); // Store token in session
-
+                
                 this.showToast('Login successful!', 'success');
                 this.showDashboard();
             } else {
@@ -218,8 +201,7 @@ class PayEaseApp {
             if (data.success) {
                 this.currentUser = data.user;
                 localStorage.setItem('payease_user', JSON.stringify(data.user));
-                sessionStorage.setItem('payease_auth_token', data.token); // Store token in session
-
+                
                 this.showToast('Account created successfully!', 'success');
                 this.showDashboard();
             } else {
@@ -250,9 +232,9 @@ class PayEaseApp {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.authToken}`
                 },
                 body: JSON.stringify({
+                    fromUserId: this.currentUser.id,
                     toUpiId: toUpiId,
                     amount: amount,
                     description: description,
@@ -267,23 +249,29 @@ class PayEaseApp {
             }
 
             if (data.success) {
+                // Update current user balance from response
+                if (data.balances && data.balances.sender) {
+                    this.currentUser.balance = data.balances.sender.current;
+                    this.updateUserInfo();
+                }
+
                 this.hidePaymentForm();
-                if (data.transaction.status === 'completed') {
+                
+                if (data.transaction.status === 'SUCCESS') {
                     this.showSuccessModal(data.transaction);
                 } else {
                     this.showFailureModal(data.transaction);
                 }
-                this.loadTransactions();
                 
-                // Update user balance if returned by API
-                if (data.user && data.user.balance !== undefined) {
-                    this.currentUser.balance = data.user.balance;
-                    this.updateUserInfo();
-                }
+                // Refresh transactions and balance
+                this.loadTransactions();
+                this.refreshBalance();
+                
             } else {
                 throw new Error(data.message || 'Payment failed');
             }
         } catch (error) {
+            console.error('Payment error:', error);
             this.showToast('Payment failed: ' + error.message, 'error');
         } finally {
             this.hideButtonLoading(form.querySelector('button[type="submit"]'));
@@ -293,11 +281,7 @@ class PayEaseApp {
     // Transaction management
     async loadTransactions() {
         try {
-            const response = await fetch(`${this.apiBaseUrl}/api/transactions?userId=${this.currentUser.id}`, {
-                headers: {
-                    'Authorization': `Bearer ${this.authToken}`
-                }
-            });
+            const response = await fetch(`${this.apiBaseUrl}/api/transactions/${this.currentUser.id}`);
             
             const data = await response.json();
             
@@ -332,28 +316,27 @@ class PayEaseApp {
         }
 
         transactionsList.innerHTML = transactions.slice(0, 10).map(transaction => {
-            // Determine if transaction is sent or received
-            const isSent = transaction.from_user_id === this.currentUser.id;
-            const type = isSent ? 'sent' : 'received';
+            // Use the direction field from backend or determine based on user ID
+            const direction = transaction.direction || (transaction.fromUserId === this.currentUser.id ? 'sent' : 'received');
             const amount = parseFloat(transaction.amount);
             
             return `
                 <div class="transaction-item">
-                    <div class="transaction-icon ${type}">
-                        <i class="fas ${type === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
+                    <div class="transaction-icon ${direction}">
+                        <i class="fas ${direction === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
                     </div>
                     <div class="transaction-details">
-                        <h6>${type === 'sent' ? 'Sent to' : 'Received from'} ${isSent ? transaction.to_upi_id : transaction.from_name || 'Unknown'}</h6>
+                        <h6>${direction === 'sent' ? 'Sent to' : 'Received from'} ${direction === 'sent' ? transaction.toUpiId : (transaction.fromName || 'Unknown')}</h6>
                         <p class="text-muted mb-0">
-                            <small>${this.formatDate(transaction.created_at)}</small>
+                            <small>${this.formatDate(transaction.timestamp)}</small>
                             ${transaction.description ? `<br><small>${transaction.description}</small>` : ''}
                         </p>
                     </div>
                     <div class="transaction-amount">
-                        <div class="amount ${type === 'sent' ? 'text-danger' : 'text-success'}">
-                            ${type === 'sent' ? '-' : '+'}₹${amount.toFixed(2)}
+                        <div class="amount ${direction === 'sent' ? 'text-danger' : 'text-success'}">
+                            ${direction === 'sent' ? '-' : '+'}₹${amount.toFixed(2)}
                         </div>
-                        <span class="status ${transaction.status}">${this.capitalizeFirst(transaction.status)}</span>
+                        <span class="status ${transaction.status.toLowerCase()}">${this.capitalizeFirst(transaction.status)}</span>
                     </div>
                 </div>
             `;
@@ -545,11 +528,7 @@ class PayEaseApp {
 
     async refreshBalance() {
         try {
-            const response = await fetch(`${this.apiBaseUrl}/api/user/balance`, {
-                headers: {
-                    'Authorization': `Bearer ${this.authToken}`
-                }
-            });
+            const response = await fetch(`${this.apiBaseUrl}/api/user/balance?userId=${this.currentUser.id}`);
             
             const data = await response.json();
             

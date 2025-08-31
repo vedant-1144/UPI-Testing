@@ -207,10 +207,6 @@ app.post('/api/auth/login', async (req, res) => {
         console.log('🔍 Database query result:', result.rows.length, 'users found');
 
         if (result.rows.length === 0) {
-            // Let's also check what users exist for debugging
-            const allUsers = await pool.query('SELECT phone, pin, name FROM users');
-            console.log('👥 All users in database:', allUsers.rows);
-            
             return res.status(401).json({ 
                 success: false, 
                 message: 'Invalid phone number or PIN' 
@@ -358,9 +354,112 @@ app.get('/api/users/:userId/balance', async (req, res) => {
     }
 });
 
+// Update user balance
+app.put('/api/users/:userId/balance', async (req, res) => {
+    try {
+        console.log('💰 Balance update request:', { userId: req.params.userId, body: req.body });
+        
+        const { userId } = req.params;
+        const { amount, type, pin, description } = req.body;
+
+        if (!amount || !type || !pin) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Amount, type (add/subtract), and PIN are required' 
+            });
+        }
+
+        const updateAmount = parseFloat(amount);
+        if (isNaN(updateAmount) || updateAmount <= 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid amount' 
+            });
+        }
+
+        // Verify PIN and get current balance
+        const userResult = await pool.query(
+            'SELECT id, name, balance, is_locked FROM users WHERE id = $1 AND pin = $2',
+            [userId, pin]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid PIN or user not found' 
+            });
+        }
+
+        const user = userResult.rows[0];
+        
+        if (user.is_locked) {
+            return res.status(423).json({ 
+                success: false, 
+                message: 'Account is locked' 
+            });
+        }
+
+        const currentBalance = parseFloat(user.balance);
+
+        // Calculate new balance
+        let newBalance;
+        if (type === 'add') {
+            newBalance = currentBalance + updateAmount;
+        } else if (type === 'subtract') {
+            if (currentBalance < updateAmount) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Insufficient balance' 
+                });
+            }
+            newBalance = currentBalance - updateAmount;
+        } else {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid type. Use "add" or "subtract"' 
+            });
+        }
+
+        // Update balance in database
+        const updateResult = await pool.query(
+            'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING balance',
+            [newBalance, userId]
+        );
+
+        console.log('✅ Balance updated successfully:', { 
+            userId, 
+            oldBalance: currentBalance, 
+            newBalance: parseFloat(updateResult.rows[0].balance) 
+        });
+
+        res.json({
+            success: true,
+            message: `Balance ${type === 'add' ? 'added' : 'deducted'} successfully`,
+            balance: {
+                previous: currentBalance,
+                current: parseFloat(updateResult.rows[0].balance),
+                change: type === 'add' ? updateAmount : -updateAmount
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Balance update error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error: ' + error.message 
+        });
+    }
+});
+
 // Create transaction
 app.post('/api/transactions', async (req, res) => {
     try {
+        console.log('💸 Transaction request:', { 
+            fromUserId: req.body.fromUserId, 
+            toUpiId: req.body.toUpiId, 
+            amount: req.body.amount 
+        });
+
         const { fromUserId, toUpiId, amount, description, pin } = req.body;
 
         if (!fromUserId || !toUpiId || !amount || !pin) {
@@ -386,74 +485,128 @@ app.post('/api/transactions', async (req, res) => {
             });
         }
 
-        // Verify PIN
-        const pinResult = await pool.query(
-            'SELECT id, balance, is_locked FROM users WHERE id = $1 AND pin = $2',
-            [fromUserId, pin]
-        );
-
-        if (pinResult.rows.length === 0) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Invalid PIN' 
-            });
-        }
-
-        const user = pinResult.rows[0];
+        // Start database transaction
+        const client = await pool.connect();
         
-        if (user.is_locked) {
-            return res.status(423).json({ 
-                success: false, 
-                message: 'Account is locked' 
-            });
-        }
-
-        const currentBalance = parseFloat(user.balance);
-
-        // Check sufficient balance
-        if (currentBalance < transactionAmount) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Insufficient balance' 
-            });
-        }
-
-        // Generate reference ID
-        const referenceId = generateReferenceId();
-
-        // Start transaction
-        await pool.query('BEGIN');
-
         try {
-            // Deduct from sender
-            await pool.query(
-                'UPDATE users SET balance = balance - $1 WHERE id = $2',
-                [transactionAmount, fromUserId]
+            await client.query('BEGIN');
+
+            // Verify sender PIN and get sender details
+            const senderResult = await client.query(
+                'SELECT id, name, phone, balance, is_locked FROM users WHERE id = $1 AND pin = $2',
+                [fromUserId, pin]
             );
 
-            // Check if recipient exists and credit them
-            const recipientResult = await pool.query(
-                'SELECT id FROM users WHERE phone = $1 OR email = $1',
-                [toUpiId.replace('@paytm', '').replace('@phonepe', '').replace('@gpay', '')]
+            if (senderResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(401).json({ 
+                    success: false, 
+                    message: 'Invalid PIN' 
+                });
+            }
+
+            const sender = senderResult.rows[0];
+            
+            if (sender.is_locked) {
+                await client.query('ROLLBACK');
+                return res.status(423).json({ 
+                    success: false, 
+                    message: 'Sender account is locked' 
+                });
+            }
+
+            const senderBalance = parseFloat(sender.balance);
+
+            // Check sufficient balance
+            if (senderBalance < transactionAmount) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Insufficient balance' 
+                });
+            }
+
+            // Find recipient by phone or email (extract from UPI ID)
+            const cleanUpiId = toUpiId.replace('@paytm', '').replace('@phonepe', '').replace('@gpay', '').replace('@upi', '');
+            const recipientResult = await client.query(
+                'SELECT id, name, phone, balance, is_locked FROM users WHERE phone = $1 OR email = $1',
+                [cleanUpiId]
             );
 
+            let recipient = null;
+            let recipientBalance = 0;
             let transactionStatus = 'SUCCESS';
+
             if (recipientResult.rows.length > 0) {
-                await pool.query(
-                    'UPDATE users SET balance = balance + $1 WHERE id = $2',
-                    [transactionAmount, recipientResult.rows[0].id]
+                recipient = recipientResult.rows[0];
+                recipientBalance = parseFloat(recipient.balance);
+                
+                if (recipient.is_locked) {
+                    await client.query('ROLLBACK');
+                    return res.status(423).json({ 
+                        success: false, 
+                        message: 'Recipient account is locked' 
+                    });
+                }
+            } else {
+                // If recipient not found, still process as external transfer
+                transactionStatus = 'SUCCESS'; // Could be PENDING for external transfers
+            }
+
+            // Generate reference ID
+            const referenceId = generateReferenceId();
+
+            // Update sender balance (deduct amount)
+            const newSenderBalance = senderBalance - transactionAmount;
+            await client.query(
+                'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                [newSenderBalance, fromUserId]
+            );
+
+            console.log('💰 Sender balance updated:', { 
+                senderId: fromUserId, 
+                oldBalance: senderBalance, 
+                newBalance: newSenderBalance 
+            });
+
+            // Update recipient balance if they exist in our system
+            let newRecipientBalance = recipientBalance;
+            if (recipient) {
+                newRecipientBalance = recipientBalance + transactionAmount;
+                await client.query(
+                    'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                    [newRecipientBalance, recipient.id]
+                );
+
+                console.log('💰 Recipient balance updated:', { 
+                    recipientId: recipient.id, 
+                    oldBalance: recipientBalance, 
+                    newBalance: newRecipientBalance 
+                });
+
+                // Insert credit transaction for recipient
+                await client.query(
+                    'INSERT INTO transactions (reference_id, from_user_id, to_upi_id, amount, description, status, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                    [referenceId + '_CREDIT', recipient.id, sender.phone, transactionAmount, description || 'Money received', transactionStatus, 'CREDIT']
                 );
             }
 
-            // Insert transaction record
-            const transactionResult = await pool.query(
+            // Insert debit transaction for sender
+            const transactionResult = await client.query(
                 'INSERT INTO transactions (reference_id, from_user_id, to_upi_id, amount, description, status, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
                 [referenceId, fromUserId, toUpiId, transactionAmount, description || '', transactionStatus, 'DEBIT']
             );
 
-            await pool.query('COMMIT');
+            await client.query('COMMIT');
 
             const transaction = transactionResult.rows[0];
+            
+            console.log('✅ Transaction completed:', { 
+                referenceId, 
+                senderNewBalance: newSenderBalance,
+                recipientNewBalance: recipient ? newRecipientBalance : 'External'
+            });
+
             res.json({
                 success: true,
                 message: 'Transaction completed successfully',
@@ -466,19 +619,75 @@ app.post('/api/transactions', async (req, res) => {
                     status: transaction.status,
                     timestamp: transaction.created_at
                 },
-                newBalance: currentBalance - transactionAmount
+                balances: {
+                    sender: {
+                        previous: senderBalance,
+                        current: newSenderBalance
+                    },
+                    recipient: recipient ? {
+                        previous: recipientBalance,
+                        current: newRecipientBalance
+                    } : null
+                }
             });
 
         } catch (transactionError) {
-            await pool.query('ROLLBACK');
+            await client.query('ROLLBACK');
             throw transactionError;
+        } finally {
+            client.release();
         }
 
     } catch (error) {
-        console.error('Transaction error:', error);
+        console.error('❌ Transaction error:', error);
         res.status(500).json({ 
             success: false, 
             message: 'Transaction failed. Please try again.' 
+        });
+    }
+});
+
+// Get current user balance (alternative endpoint)
+app.get('/api/user/balance', async (req, res) => {
+    try {
+        const { userId } = req.query;
+
+        if (!userId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'User ID is required' 
+            });
+        }
+
+        const result = await pool.query(
+            'SELECT id, name, balance FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        const user = result.rows[0];
+
+        res.json({
+            success: true,
+            balance: parseFloat(user.balance),
+            user: {
+                id: user.id,
+                name: user.name,
+                balance: parseFloat(user.balance)
+            }
+        });
+
+    } catch (error) {
+        console.error('Current user balance fetch error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
         });
     }
 });
@@ -490,8 +699,24 @@ app.get('/api/transactions/:userId', async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const offset = parseInt(req.query.offset) || 0;
 
+        // Get both sent and received transactions
         const result = await pool.query(
-            'SELECT * FROM transactions WHERE from_user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+            `SELECT t.*, 
+                    CASE 
+                        WHEN t.from_user_id = $1 THEN 'sent'
+                        ELSE 'received'
+                    END as transaction_direction,
+                    u_from.name as from_name,
+                    u_from.phone as from_phone
+             FROM transactions t 
+             LEFT JOIN users u_from ON t.from_user_id = u_from.id
+             WHERE t.from_user_id = $1 OR t.to_upi_id IN (
+                 SELECT phone FROM users WHERE id = $1
+                 UNION 
+                 SELECT email FROM users WHERE id = $1
+             )
+             ORDER BY t.created_at DESC 
+             LIMIT $2 OFFSET $3`,
             [userId, limit, offset]
         );
 
@@ -499,6 +724,10 @@ app.get('/api/transactions/:userId', async (req, res) => {
             id: t.id,
             referenceId: t.reference_id,
             amount: parseFloat(t.amount),
+            direction: t.transaction_direction,
+            fromUserId: t.from_user_id,
+            fromName: t.from_name,
+            fromPhone: t.from_phone,
             toUpiId: t.to_upi_id,
             description: t.description,
             status: t.status,
