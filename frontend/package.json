@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Frontend for UPI Payment Simulation & Testing Platform",
   "scripts": {
-    "start": "http-server -p 8000 -c-1",
+    "start": "http-server -p 8000 -c-1 --silent",
+    "start-verbose": "http-server -p 8000 -c-1",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {

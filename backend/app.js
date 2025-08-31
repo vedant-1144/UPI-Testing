@@ -1,610 +1,562 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const winston = require("winston");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const { v4: uuidv4 } = require("uuid");
-const QRCode = require("qrcode");
-const Database = require("./database");
-const { validateUPIId, validateAmount, validatePIN } = require("./validators");
-const { Pool } = require("pg");
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const { Pool } = require('pg');
+require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || "upi_simulator_secret_key";
+const PORT = process.env.PORT || 3000;
 
-// Initialize database
-const db = new Database();
-
-// Configure PostgreSQL connection
+// Database connection
 const pool = new Pool({
-  host: process.env.DB_HOST || "localhost",
-  port: process.env.DB_PORT || 5432,
-  user: process.env.DB_USER || "postgres",
-  password: process.env.DB_PASSWORD || "password",
-  database: process.env.DB_NAME || "upi_payment_simulator",
+    user: process.env.PG_USER,
+    host: process.env.PG_HOST,
+    database: process.env.PG_DATABASE,
+    password: process.env.PG_PASSWORD,
+    port: process.env.PG_PORT,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
 });
 
-// Configure Winston logger
-const logger = winston.createLogger({
-  level: "info",
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.errors({ stack: true }),
-    winston.format.json()
-  ),
-  defaultMeta: { service: "upi-simulator" },
-  transports: [
-    new winston.transports.File({ filename: "logs/error.log", level: "error" }),
-    new winston.transports.File({ filename: "logs/combined.log" }),
-    new winston.transports.Console({
-      format: winston.format.simple(),
-    }),
-  ],
+// Disable Express default logging and suppress deprecation warnings
+process.env.NODE_NO_WARNINGS = '1';
+
+// Custom minimal logging middleware (only for API errors)
+app.use((req, res, next) => {
+    // Only log API calls, not static file requests
+    if (req.path.startsWith('/api/')) {
+        const start = Date.now();
+        res.on('finish', () => {
+            if (res.statusCode >= 400) {
+                const duration = Date.now() - start;
+                console.log(`❌ ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
+            }
+        });
+    }
+    next();
 });
 
 // Middleware
-app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../frontend'), {
+    // Disable etag to prevent some warnings
+    etag: false,
+    // Disable directory listing
+    index: ['index.html'],
+    // Set cache control
+    maxAge: '1d',
+    // Disable logging for static files
+    silent: true
+}));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: "Too many requests from this IP",
-});
-app.use(limiter);
-
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ error: "Access token required" });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ error: "Invalid or expired token" });
+// Initialize database
+async function initializeDatabase() {
+    try {
+        await createTables();
+        console.log('✅ Database ready');
+    } catch (error) {
+        console.error('❌ Database error:', error.message);
     }
-    req.user = user;
-    next();
-  });
-};
+}
 
-// Session timeout tracking
-const sessions = new Map();
-const SESSION_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+async function createTables() {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
 
-// Clean expired sessions
-setInterval(() => {
-  const now = Date.now();
-  for (const [sessionId, session] of sessions) {
-    if (now - session.lastActivity > SESSION_TIMEOUT) {
-      sessions.delete(sessionId);
-      logger.info(`Session ${sessionId} expired`);
+        // Drop existing tables if they exist to recreate with correct schema
+        await client.query('DROP TABLE IF EXISTS transactions CASCADE');
+        await client.query('DROP TABLE IF EXISTS users CASCADE');
+        
+        // Users table with simple integer IDs
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                phone VARCHAR(15) UNIQUE NOT NULL,
+                pin VARCHAR(6) NOT NULL,
+                balance DECIMAL(12,2) DEFAULT 0.00,
+                is_locked BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Transactions table
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS transactions (
+                id SERIAL PRIMARY KEY,
+                reference_id VARCHAR(50) UNIQUE NOT NULL,
+                from_user_id INTEGER REFERENCES users(id),
+                to_upi_id VARCHAR(255) NOT NULL,
+                amount DECIMAL(12,2) NOT NULL,
+                description TEXT,
+                status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+                transaction_type VARCHAR(20) DEFAULT 'DEBIT',
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Create indexes for better performance
+        await client.query('CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_from_user ON transactions(from_user_id)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_ref ON transactions(reference_id)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)');
+
+        await client.query('COMMIT');
+        // Remove verbose table creation message
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('❌ Database setup failed:', error.message);
+        throw error;
+    } finally {
+        client.release();
     }
-  }
-}, 60000); // Check every minute
+}
 
-// API Routes
+// Initialize database on startup
+initializeDatabase();
+
+// Helper function to generate reference ID
+function generateReferenceId() {
+    return 'REF' + Date.now() + Math.floor(Math.random() * 1000);
+}
+
+// Routes
 
 // Health check
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'OK', message: 'PayEase API is running', timestamp: new Date().toISOString() });
+});
+
+// User Authentication
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { phone, pin } = req.body;
+
+        if (!phone || !pin) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Phone number and PIN are required' 
+            });
+        }
+
+        const result = await pool.query(
+            'SELECT id, name, email, phone, balance, is_locked FROM users WHERE phone = $1 AND pin = $2',
+            [phone, pin]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid phone number or PIN' 
+            });
+        }
+
+        const user = result.rows[0];
+
+        if (user.is_locked) {
+            return res.status(423).json({ 
+                success: false, 
+                message: 'Account is locked. Please contact support.' 
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Login successful',
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                phone: user.phone,
+                balance: parseFloat(user.balance)
+            }
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
 });
 
 // User Registration
-app.post("/api/register", async (req, res) => {
-  try {
-    const { name, phone, email, pin, deviceId } = req.body;
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { name, email, phone, pin } = req.body;
 
-    // Validate input
-    if (!name || !phone || !email || !pin || !deviceId) {
-      return res.status(400).json({ error: "All fields are required" });
+        if (!name || !email || !phone || !pin) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'All fields are required' 
+            });
+        }
+
+        // Validate PIN (should be 4-6 digits)
+        if (!/^\d{4,6}$/.test(pin)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'PIN must be 4-6 digits' 
+            });
+        }
+
+        // Check if user already exists
+        const existingUser = await pool.query(
+            'SELECT id FROM users WHERE phone = $1 OR email = $2',
+            [phone, email]
+        );
+
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({ 
+                success: false, 
+                message: 'User with this phone number or email already exists' 
+            });
+        }
+
+        // Create new user with default balance of 5000
+        const result = await pool.query(
+            'INSERT INTO users (name, email, phone, pin, balance) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, balance',
+            [name, email, phone, pin, 5000.00]
+        );
+
+        const newUser = result.rows[0];
+        res.status(201).json({
+            success: true,
+            message: 'Account created successfully',
+            user: {
+                id: newUser.id,
+                name: newUser.name,
+                email: newUser.email,
+                phone: newUser.phone,
+                balance: parseFloat(newUser.balance)
+            }
+        });
+
+    } catch (error) {
+        console.error('Registration error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
-
-    if (!validatePIN(pin)) {
-      return res.status(400).json({ error: "PIN must be 4-6 digits" });
-    }
-
-    // Check if user already exists
-    const existingUser = await db.getUserByPhone(phone);
-    if (existingUser) {
-      return res.status(409).json({ error: "User already exists" });
-    }
-
-    const existingEmail = await db.getUserByEmail(email);
-    if (existingEmail) {
-      return res.status(409).json({ error: "Email already exists" });
-    }
-
-    // Hash PIN
-    const hashedPin = await bcrypt.hash(pin, 10);
-
-    // Create user
-    const user = await db.createUser({
-      name,
-      phone,
-      email,
-      pin: hashedPin,
-      deviceId: `${phone}_${Date.now()}`, // Make sure this matches 'deviceId'
-    });
-
-    // Create default UPI ID
-    const upiId = `${phone}@simulator`;
-    await db.createUPIId({
-      userId: user.id, // Make sure this is 'userId', not 'user_id'
-      upiId: `${phone}@simulator`, // Make sure this is 'upiId', not 'upi_id'
-      isDefault: true, // Make sure this is 'isDefault', not 'is_default'
-    });
-
-    // Create default bank account
-    await db.createBankAccount({
-      userId: user.id, // Make sure this is 'userId', not 'user_id'
-      accountNumber: `ACC${phone}${Math.floor(Math.random() * 1000)}`,
-      ifsc: "SIMU0000001",
-      bankName: "Simulator Bank", // Make sure this is 'bankName', not 'bank_name'
-      balance: 10000,
-    });
-
-    logger.info(`User registered: ${phone}`);
-    res.status(201).json({
-      message: "User registered successfully",
-      upiId: upiId,
-    });
-  } catch (error) {
-    logger.error("Registration error:", error);
-    if (error.code === "23505") {
-      // Unique constraint violation
-      return res.status(409).json({ error: "User or email already exists" });
-    }
-    res.status(500).json({ error: "Internal server error" });
-  }
 });
 
-// User Login
-app.post("/api/login", async (req, res) => {
-  try {
-    const { phone, pin, deviceId } = req.body;
+// Get user balance
+app.get('/api/users/:userId/balance', async (req, res) => {
+    try {
+        const { userId } = req.params;
 
-    const user = await db.getUserByPhone(phone);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+        const result = await pool.query(
+            'SELECT balance FROM users WHERE id = $1',
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        res.json({
+            success: true,
+            balance: parseFloat(result.rows[0].balance)
+        });
+
+    } catch (error) {
+        console.error('Balance fetch error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
     }
-
-    if (user.is_locked) {
-      return res
-        .status(423)
-        .json({ error: "Account locked due to multiple failed attempts" });
-    }
-
-    // Check device binding
-    if (user.device_id !== deviceId) {
-      // Simulate OTP requirement for new device
-      logger.info(`New device login attempt for user: ${phone}`);
-      return res.status(202).json({
-        message: "OTP sent to registered mobile number",
-        requiresOTP: true,
-      });
-    }
-
-    // Verify PIN
-    const isValidPin = await bcrypt.compare(pin, user.pin); // Not user.pin_hash
-    if (!isValidPin) {
-      const pinAttempts = (user.pin_attempts || 0) + 1;
-
-      if (pinAttempts >= 3) {
-        await db.lockUser(user.id);
-        logger.warn(`Account locked for user: ${phone}`);
-        return res
-          .status(423)
-          .json({ error: "Account locked due to multiple failed attempts" });
-      }
-
-      await db.updateUser(user.id, { pin_attempts: pinAttempts });
-      return res.status(401).json({
-        error: "Invalid PIN",
-        attemptsRemaining: 3 - pinAttempts,
-      });
-    }
-
-    // Reset pin attempts and update last login on successful login
-    await db.updateUser(user.id, {
-      pin_attempts: 0,
-      last_login: new Date().toISOString(),
-    });
-
-    // Create session
-    const sessionId = uuidv4();
-    const token = jwt.sign({ userId: user.id, sessionId }, JWT_SECRET, {
-      expiresIn: "1h",
-    });
-
-    sessions.set(sessionId, {
-      userId: user.id,
-      lastActivity: Date.now(),
-    });
-
-    logger.info(`User logged in: ${phone}`);
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-      },
-    });
-  } catch (error) {
-    logger.error("Login error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
 });
 
-// Get user profile
-app.get("/api/profile", authenticateToken, async (req, res) => {
-  try {
-    const user = await db.getUserById(req.user.userId);
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
+// Create transaction
+app.post('/api/transactions', async (req, res) => {
+    try {
+        const { fromUserId, toUpiId, amount, description, pin } = req.body;
+
+        if (!fromUserId || !toUpiId || !amount || !pin) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'All required fields must be provided' 
+            });
+        }
+
+        // Validate amount
+        const transactionAmount = parseFloat(amount);
+        if (isNaN(transactionAmount) || transactionAmount <= 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid amount' 
+            });
+        }
+
+        if (transactionAmount > 50000) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Transaction limit exceeded (₹50,000 max)' 
+            });
+        }
+
+        // Verify PIN
+        const pinResult = await pool.query(
+            'SELECT id, balance, is_locked FROM users WHERE id = $1 AND pin = $2',
+            [fromUserId, pin]
+        );
+
+        if (pinResult.rows.length === 0) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid PIN' 
+            });
+        }
+
+        const user = pinResult.rows[0];
+        
+        if (user.is_locked) {
+            return res.status(423).json({ 
+                success: false, 
+                message: 'Account is locked' 
+            });
+        }
+
+        const currentBalance = parseFloat(user.balance);
+
+        // Check sufficient balance
+        if (currentBalance < transactionAmount) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Insufficient balance' 
+            });
+        }
+
+        // Generate reference ID
+        const referenceId = generateReferenceId();
+
+        // Start transaction
+        await pool.query('BEGIN');
+
+        try {
+            // Deduct from sender
+            await pool.query(
+                'UPDATE users SET balance = balance - $1 WHERE id = $2',
+                [transactionAmount, fromUserId]
+            );
+
+            // Check if recipient exists and credit them
+            const recipientResult = await pool.query(
+                'SELECT id FROM users WHERE phone = $1 OR email = $1',
+                [toUpiId.replace('@paytm', '').replace('@phonepe', '').replace('@gpay', '')]
+            );
+
+            let transactionStatus = 'SUCCESS';
+            if (recipientResult.rows.length > 0) {
+                await pool.query(
+                    'UPDATE users SET balance = balance + $1 WHERE id = $2',
+                    [transactionAmount, recipientResult.rows[0].id]
+                );
+            }
+
+            // Insert transaction record
+            const transactionResult = await pool.query(
+                'INSERT INTO transactions (reference_id, from_user_id, to_upi_id, amount, description, status, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+                [referenceId, fromUserId, toUpiId, transactionAmount, description || '', transactionStatus, 'DEBIT']
+            );
+
+            await pool.query('COMMIT');
+
+            const transaction = transactionResult.rows[0];
+            res.json({
+                success: true,
+                message: 'Transaction completed successfully',
+                transaction: {
+                    id: transaction.id,
+                    referenceId: transaction.reference_id,
+                    amount: parseFloat(transaction.amount),
+                    toUpiId: transaction.to_upi_id,
+                    description: transaction.description,
+                    status: transaction.status,
+                    timestamp: transaction.created_at
+                },
+                newBalance: currentBalance - transactionAmount
+            });
+
+        } catch (transactionError) {
+            await pool.query('ROLLBACK');
+            throw transactionError;
+        }
+
+    } catch (error) {
+        console.error('Transaction error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Transaction failed. Please try again.' 
+        });
     }
-
-    const upiIds = await db.getUPIIdsByUserId(user.id);
-    const bankAccounts = await db.getBankAccountsByUserId(user.id);
-
-    res.json({
-      user: {
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-      },
-      upiIds: upiIds.map((upi) => ({
-        id: upi.id,
-        upiId: upi.upi_id,
-        isDefault: upi.is_default,
-        isActive: upi.is_active,
-      })),
-      bankAccounts: bankAccounts.map((acc) => ({
-        id: acc.id,
-        accountNumber: acc.account_number.replace(/\d(?=\d{4})/g, "*"), // Mask account number
-        ifsc: acc.ifsc,
-        bankName: acc.bank_name,
-        balance: acc.balance,
-        isPrimary: acc.is_primary,
-      })),
-    });
-  } catch (error) {
-    logger.error("Profile fetch error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
 });
 
-// Create payment
-app.post("/api/payment", authenticateToken, async (req, res) => {
-  try {
-    const { toUpiId, amount, description, pin } = req.body;
+// Get user transactions
+app.get('/api/transactions/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
 
-    // Update session activity
-    const session = sessions.get(req.user.sessionId);
-    if (!session) {
-      return res.status(401).json({ error: "Session expired" });
+        const result = await pool.query(
+            'SELECT * FROM transactions WHERE from_user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+            [userId, limit, offset]
+        );
+
+        const transactions = result.rows.map(t => ({
+            id: t.id,
+            referenceId: t.reference_id,
+            amount: parseFloat(t.amount),
+            toUpiId: t.to_upi_id,
+            description: t.description,
+            status: t.status,
+            type: t.transaction_type,
+            timestamp: t.created_at
+        }));
+
+        res.json({
+            success: true,
+            transactions,
+            hasMore: result.rows.length === limit
+        });
+
+    } catch (error) {
+        console.error('Transactions fetch error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch transactions' 
+        });
     }
-    session.lastActivity = Date.now();
-
-    // Validate inputs
-    if (!validateUPIId(toUpiId)) {
-      return res.status(400).json({ error: "Invalid UPI ID format" });
-    }
-
-    if (!validateAmount(amount)) {
-      return res.status(400).json({ error: "Invalid amount" });
-    }
-
-    if (!validatePIN(pin)) {
-      return res.status(400).json({ error: "Invalid PIN format" });
-    }
-
-    // Check compliance rules
-    if (amount > 200000) {
-      return res
-        .status(403)
-        .json({ error: "Transaction amount exceeds daily limit" });
-    }
-
-    // Get sender details
-    const sender = await db.getUserById(req.user.userId);
-    if (!sender) {
-      return res.status(404).json({ error: "Sender not found" });
-    }
-
-    // Verify PIN
-    const isValidPin = await bcrypt.compare(pin, sender.pin_hash);
-    if (!isValidPin) {
-      return res.status(401).json({ error: "Invalid PIN" });
-    }
-
-    // Get sender's primary bank account
-    const senderAccount = await db.getPrimaryBankAccount(sender.id);
-    if (!senderAccount) {
-      return res.status(404).json({ error: "No bank account found" });
-    }
-
-    // Check balance
-    if (parseFloat(senderAccount.balance) < amount) {
-      return res.status(400).json({ error: "Insufficient balance" });
-    }
-
-    // Check if recipient exists
-    const recipient = await db.getUserByUpiId(toUpiId);
-    if (!recipient) {
-      // Create failed transaction
-      const transactionRef = `TXN${Date.now()}${Math.floor(
-        Math.random() * 1000
-      )}`;
-      const failedTransaction = await db.createTransaction({
-        transaction_ref: transactionRef,
-        from_user_id: sender.id,
-        to_upi_id: toUpiId,
-        amount: amount,
-        description: description || "",
-        status: "FAILED",
-        failure_reason: "Invalid recipient UPI ID",
-      });
-
-      logger.warn(`Failed transaction - Invalid UPI ID: ${toUpiId}`);
-      return res.status(404).json({
-        error: "Invalid recipient UPI ID",
-        transactionId: failedTransaction.id,
-        message: "Amount will be refunded if debited",
-      });
-    }
-
-    const recipientAccount = await db.getPrimaryBankAccount(recipient.id);
-    if (!recipientAccount) {
-      return res
-        .status(404)
-        .json({ error: "Recipient bank account not found" });
-    }
-
-    // Generate transaction reference
-    const transactionRef = `TXN${Date.now()}${Math.floor(
-      Math.random() * 1000
-    )}`;
-
-    // Get sender's UPI ID
-    const senderUpiIds = await db.getUPIIdsByUserId(sender.id);
-    const senderUpiId =
-      senderUpiIds.find((upi) => upi.is_default)?.upi_id ||
-      senderUpiIds[0]?.upi_id;
-
-    // Create transaction
-    const transaction = await db.createTransaction({
-      transaction_ref: transactionRef,
-      from_user_id: sender.id,
-      to_user_id: recipient.id,
-      from_upi_id: senderUpiId,
-      to_upi_id: toUpiId,
-      amount: amount,
-      description: description || "",
-      status: "SUCCESS",
-    });
-
-    // Update balances
-    const newSenderBalance = parseFloat(senderAccount.balance) - amount;
-    const newRecipientBalance = parseFloat(recipientAccount.balance) + amount;
-
-    await db.updateBankAccountBalance(senderAccount.id, newSenderBalance);
-    await db.updateBankAccountBalance(recipientAccount.id, newRecipientBalance);
-
-    logger.info(`Transaction completed: ${transaction.id}`);
-    res.json({
-      transactionId: transaction.id,
-      transactionRef: transactionRef,
-      status: "SUCCESS",
-      message: "Payment completed successfully",
-      amount,
-      toUpiId,
-      timestamp: transaction.created_at,
-    });
-  } catch (error) {
-    logger.error("Payment error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
 });
 
-// Generate QR Code for merchant payment
-app.post("/api/generate-qr", authenticateToken, async (req, res) => {
-  try {
-    const { amount, merchantName, merchantUpiId } = req.body;
+// Get all transactions (admin endpoint)
+app.get('/api/transactions', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = parseInt(req.query.offset) || 0;
 
-    const qrData = {
-      pa: merchantUpiId || "merchant@simulator",
-      pn: merchantName || "Test Merchant",
-      am: amount,
-      cu: "INR",
-      tn: `Payment to ${merchantName || "Test Merchant"}`,
-    };
+        const result = await pool.query(
+            `SELECT t.*, u.name as sender_name, u.phone as sender_phone 
+             FROM transactions t 
+             JOIN users u ON t.from_user_id = u.id 
+             ORDER BY t.created_at DESC 
+             LIMIT $1 OFFSET $2`,
+            [limit, offset]
+        );
 
-    const qrString = `upi://pay?${new URLSearchParams(qrData).toString()}`;
-    const qrCode = await QRCode.toDataURL(qrString);
+        const transactions = result.rows.map(t => ({
+            id: t.id,
+            referenceId: t.reference_id,
+            amount: parseFloat(t.amount),
+            fromUser: {
+                name: t.sender_name,
+                phone: t.sender_phone
+            },
+            toUpiId: t.to_upi_id,
+            description: t.description,
+            status: t.status,
+            type: t.transaction_type,
+            timestamp: t.created_at
+        }));
 
-    res.json({
-      qrCode,
-      qrString,
-      merchantInfo: {
-        name: qrData.pn,
-        upiId: qrData.pa,
-        amount: amount,
-      },
-    });
-  } catch (error) {
-    logger.error("QR generation error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+        res.json({
+            success: true,
+            transactions,
+            hasMore: result.rows.length === limit
+        });
 
-// Get transaction history
-app.get("/api/transactions", authenticateToken, async (req, res) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-    const transactions = await db.getTransactionsByUserId(
-      req.user.userId,
-      parseInt(page),
-      parseInt(limit)
-    );
-
-    res.json({
-      transactions,
-      page: parseInt(page),
-      limit: parseInt(limit),
-    });
-  } catch (error) {
-    logger.error("Transaction history error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Create transaction endpoint
-app.post("/api/create-transaction", async (req, res) => {
-  try {
-    const { name, email, phone, amount, upiId } = req.body;
-
-    // First insert or get user
-    const userResult = await pool.query(
-      "INSERT INTO users (name, email, phone) VALUES ($1, $2, $3) ON CONFLICT (email) DO UPDATE SET name = $1, phone = $3 RETURNING id",
-      [name, email, phone]
-    );
-
-    const userId = userResult.rows[0].id;
-    const referenceId = "UPI" + Date.now();
-
-    // Insert transaction
-    const transactionResult = await pool.query(
-      "INSERT INTO transactions (user_id, amount, upi_id, reference_id, status) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-      [userId, amount, upiId, referenceId, "INITIATED"]
-    );
-
-    res.status(200).json({
-      success: true,
-      transactionId: transactionResult.rows[0].id,
-      referenceId,
-    });
-  } catch (error) {
-    console.error("Transaction error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to create transaction" });
-  }
-});
-
-// Update transaction status endpoint
-app.post("/api/update-transaction", async (req, res) => {
-  try {
-    const { referenceId, status } = req.body;
-
-    const result = await pool.query(
-      "UPDATE transactions SET status = $1 WHERE reference_id = $2 RETURNING id",
-      [status, referenceId]
-    );
-
-    if (result.rows.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Transaction not found" });
+    } catch (error) {
+        console.error('All transactions fetch error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch transactions' 
+        });
     }
-
-    res.status(200).json({ success: true, message: "Transaction updated" });
-  } catch (error) {
-    console.error("Update error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to update transaction" });
-  }
 });
 
-// Admin routes for testing
-app.get("/api/admin/users", async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-    const users = await db.getAllUsers(parseInt(page), parseInt(limit));
-    res.json(
-      users.map((user) => ({
-        id: user.id,
-        name: user.name,
-        phone: user.phone,
-        email: user.email,
-        is_locked: user.is_locked,
-        created_at: user.created_at,
-        upi_count: user.upi_count,
-        bank_account_count: user.bank_account_count,
-        transaction_count: user.transaction_count,
-      }))
-    );
-  } catch (error) {
-    logger.error("Admin users fetch error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
+// Create demo users (development endpoint)
+app.post('/api/create-demo-users', async (req, res) => {
+    try {
+        // Check if demo users already exist
+        const existingUsers = await pool.query(
+            'SELECT COUNT(*) FROM users WHERE phone IN ($1, $2)',
+            ['9876543210', '9876543211']
+        );
+
+        if (parseInt(existingUsers.rows[0].count) > 0) {
+            return res.json({ 
+                success: true, 
+                message: 'Demo users already exist' 
+            });
+        }
+
+        // Create demo users
+        await pool.query(`
+            INSERT INTO users (name, email, phone, pin, balance) VALUES 
+            ('John Doe', 'john@example.com', '9876543210', '1234', 10000.00),
+            ('Jane Smith', 'jane@example.com', '9876543211', '1234', 15000.00)
+        `);
+
+        res.json({ 
+            success: true, 
+            message: 'Demo users created successfully',
+            users: [
+                { name: 'John Doe', phone: '9876543210', pin: '1234', balance: 10000 },
+                { name: 'Jane Smith', phone: '9876543211', pin: '1234', balance: 15000 }
+            ]
+        });
+
+    } catch (error) {
+        console.error('Demo users creation error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to create demo users' 
+        });
+    }
 });
 
-app.get("/api/admin/transactions", async (req, res) => {
-  try {
-    const { page = 1, limit = 50 } = req.query;
-    const transactions = await db.getAllTransactions(
-      parseInt(page),
-      parseInt(limit)
-    );
-    res.json(transactions);
-  } catch (error) {
-    logger.error("Admin transactions fetch error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-app.get("/api/admin/stats", async (req, res) => {
-  try {
-    const stats = await db.getDashboardStats();
-    res.json(stats);
-  } catch (error) {
-    logger.error("Admin stats fetch error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Reset database for testing
-app.post("/api/admin/reset", async (req, res) => {
-  try {
-    await db.reset();
-    sessions.clear();
-    logger.info("Database reset completed");
-    res.json({ message: "Database reset successfully" });
-  } catch (error) {
-    logger.error("Database reset error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
+// Serve frontend
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
 
 // Error handling middleware
-app.use((error, req, res, next) => {
-  logger.error("Unhandled error:", error);
-  res.status(500).json({ error: "Internal server error" });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ 
+        success: false, 
+        message: 'Internal server error' 
+    });
 });
 
 // Start server
 app.listen(PORT, () => {
-  logger.info(`UPI Simulator Backend running on port ${PORT}`);
-  console.log(`Server running on port ${PORT}`);
+    console.clear(); // Clear console for clean start
+    console.log('🚀 PayEase Server Started Successfully!');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log(`🌐 Frontend URL: http://localhost:${PORT}`);
+    console.log(`🔧 API Health: http://localhost:${PORT}/api/health`);
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('💳 Demo Login Accounts:');
+    console.log('   � John Doe - 📱 9876543210 | 🔐 1234 | 💰 ₹10,000');
+    console.log('   � Jane Smith - 📱 9876543211 | 🔐 1234 | 💰 ₹15,000');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('✨ Server running in quiet mode (only errors will be logged)');
+    console.log('🎯 Ready for transactions!');
 });
 
 module.exports = app;

@@ -1,728 +1,584 @@
-// UPI Payment Simulator Frontend JavaScript
-
-const API_BASE_URL = 'http://localhost:8080/api';
-let authToken = localStorage.getItem('authToken');
-let currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-
-// Generate unique device ID
-function generateDeviceId() {
-    let deviceId = localStorage.getItem('deviceId');
-    if (!deviceId) {
-        deviceId = 'device_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-        localStorage.setItem('deviceId', deviceId);
+// Modern UPI Payment App - Main JavaScript File
+class PayEaseApp {
+    constructor() {
+        this.currentUser = null;
+        this.apiBaseUrl = 'http://localhost:3000';
+        this.init();
     }
-    return deviceId;
-}
 
-// Initialize app
-document.addEventListener('DOMContentLoaded', function() {
-    const deviceId = generateDeviceId();
-    document.getElementById('deviceId').value = deviceId;
-    
-    if (authToken && currentUser.id) {
-        showDashboard();
-        loadUserProfile();
-        loadTransactions();
-    } else {
-        showLogin();
+    init() {
+        this.setupEventListeners();
+        this.showLoadingScreen();
+        this.checkAuthStatus();
     }
-    
-    setupEventListeners();
-});
 
-// Setup event listeners
-function setupEventListeners() {
-    // Login form
-    document.getElementById('loginForm').addEventListener('submit', handleLogin);
-    
-    // Registration form
-    document.getElementById('registrationForm').addEventListener('submit', handleRegistration);
-    
-    // Payment form
-    document.getElementById('paymentForm').addEventListener('submit', async (e) => {
+    // Loading Screen
+    showLoadingScreen() {
+        const loadingScreen = document.getElementById('loadingScreen');
+        if (loadingScreen) {
+            setTimeout(() => {
+                loadingScreen.style.display = 'none';
+            }, 2000);
+        }
+    }
+
+    // Check if user is logged in
+    checkAuthStatus() {
+        const savedUser = localStorage.getItem('payease_user');
+        if (savedUser) {
+            this.currentUser = JSON.parse(savedUser);
+            this.showDashboard();
+        } else {
+            this.showLogin();
+        }
+    }
+
+    // Setup Event Listeners
+    setupEventListeners() {
+        // Login form
+        const loginForm = document.getElementById('loginForm');
+        if (loginForm) {
+            loginForm.addEventListener('submit', (e) => this.handleLogin(e));
+        }
+
+        // Signup form
+        const signupForm = document.getElementById('signupForm');
+        if (signupForm) {
+            signupForm.addEventListener('submit', (e) => this.handleSignup(e));
+        }
+
+        // Payment form
+        const paymentForm = document.getElementById('paymentForm');
+        if (paymentForm) {
+            paymentForm.addEventListener('submit', (e) => this.handlePayment(e));
+        }
+
+        // Logout button
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => this.handleLogout());
+        }
+
+        // Window events
+        window.addEventListener('load', () => {
+            setTimeout(() => this.hideLoadingScreen(), 2000);
+        });
+    }
+
+    hideLoadingScreen() {
+        const loadingScreen = document.getElementById('loadingScreen');
+        if (loadingScreen) {
+            loadingScreen.style.display = 'none';
+        }
+    }
+
+    // Show different sections
+    showLogin() {
+        this.hideAllSections();
+        const loginSection = document.getElementById('loginSection');
+        if (loginSection) {
+            loginSection.style.display = 'flex';
+            loginSection.classList.add('fade-in');
+        }
+    }
+
+    showSignup() {
+        this.hideAllSections();
+        const signupSection = document.getElementById('signupSection');
+        if (signupSection) {
+            signupSection.style.display = 'flex';
+            signupSection.classList.add('fade-in');
+        }
+    }
+
+    showDashboard() {
+        this.hideAllSections();
+        const dashboardSection = document.getElementById('dashboardSection');
+        if (dashboardSection) {
+            dashboardSection.style.display = 'block';
+            dashboardSection.classList.add('fade-in');
+        }
+        this.updateUserInfo();
+        this.loadTransactions();
+    }
+
+    hideAllSections() {
+        const sections = ['loginSection', 'signupSection', 'dashboardSection'];
+        sections.forEach(sectionId => {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.style.display = 'none';
+                section.classList.remove('fade-in');
+            }
+        });
+    }
+
+    // Authentication handlers
+    async handleLogin(e) {
         e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
         
-        const formData = {
-            name: document.getElementById('name').value,
-            email: document.getElementById('email').value,
-            phone: document.getElementById('phone').value,
-            amount: document.getElementById('amount').value,
-            upiId: document.getElementById('upiId').value
-        };
-        
+        const phone = document.getElementById('loginPhone').value;
+        const pin = document.getElementById('loginPin').value;
+
+        this.showButtonLoading(form.querySelector('button[type="submit"]'));
+
         try {
-            // Create transaction
-            const response = await fetch('/api/create-transaction', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(formData)
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                // Show payment simulation UI
-                simulatePayment(result.referenceId);
+            // Demo authentication - replace with real API call
+            if (this.validateDemoLogin(phone, pin)) {
+                const user = {
+                    name: phone === '9876543210' ? 'John Doe' : 'Jane Smith',
+                    phone: phone,
+                    email: phone === '9876543210' ? 'john@example.com' : 'jane@example.com',
+                    balance: 10000
+                };
+                
+                this.currentUser = user;
+                localStorage.setItem('payease_user', JSON.stringify(user));
+                
+                this.showToast('Login successful!', 'success');
+                this.showDashboard();
             } else {
-                alert('Failed to process payment: ' + result.message);
+                throw new Error('Invalid credentials');
             }
         } catch (error) {
-            console.error('Payment error:', error);
-            alert('An error occurred while processing your payment.');
+            this.showToast('Login failed: ' + error.message, 'error');
+        } finally {
+            this.hideButtonLoading(form.querySelector('button[type="submit"]'));
         }
-    });
-    
-    // QR form
-    document.getElementById('qrForm').addEventListener('submit', handleQRGeneration);
-    
-    // Logout button
-    document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+    }
+
+    validateDemoLogin(phone, pin) {
+        const demoAccounts = [
+            { phone: '9876543210', pin: '1234' },
+            { phone: '9876543211', pin: '1234' }
+        ];
+        return demoAccounts.some(account => account.phone === phone && account.pin === pin);
+    }
+
+    async handleSignup(e) {
+        e.preventDefault();
+        const form = e.target;
+        
+        const name = document.getElementById('signupName').value;
+        const email = document.getElementById('signupEmail').value;
+        const phone = document.getElementById('signupPhone').value;
+        const pin = document.getElementById('signupPin').value;
+
+        this.showButtonLoading(form.querySelector('button[type="submit"]'));
+
+        try {
+            // Demo signup - replace with real API call
+            const user = {
+                name: name,
+                phone: phone,
+                email: email,
+                balance: 5000 // Starting balance for new users
+            };
+            
+            this.currentUser = user;
+            localStorage.setItem('payease_user', JSON.stringify(user));
+            
+            this.showToast('Account created successfully!', 'success');
+            this.showDashboard();
+        } catch (error) {
+            this.showToast('Signup failed: ' + error.message, 'error');
+        } finally {
+            this.hideButtonLoading(form.querySelector('button[type="submit"]'));
+        }
+    }
+
+    // Payment handling
+    async handlePayment(e) {
+        e.preventDefault();
+        const form = e.target;
+        
+        const toUpiId = document.getElementById('toUpiId').value;
+        const amount = parseFloat(document.getElementById('amount').value);
+        const description = document.getElementById('description').value;
+        const pin = document.getElementById('paymentPin').value;
+
+        // Validate PIN for demo
+        if (!this.validatePin(pin)) {
+            this.showToast('Invalid PIN', 'error');
+            return;
+        }
+
+        this.showButtonLoading(form.querySelector('button[type="submit"]'));
+
+        try {
+            // Simulate payment processing
+            await this.simulatePayment();
+            
+            // Create transaction record
+            const transaction = {
+                id: this.generateTransactionId(),
+                toUpiId: toUpiId,
+                amount: amount,
+                description: description,
+                status: Math.random() > 0.1 ? 'completed' : 'failed', // 90% success rate
+                timestamp: new Date().toISOString(),
+                type: 'sent'
+            };
+
+            // Save transaction
+            this.saveTransaction(transaction);
+            
+            // Update balance if successful
+            if (transaction.status === 'completed') {
+                this.currentUser.balance -= amount;
+                localStorage.setItem('payease_user', JSON.stringify(this.currentUser));
+                this.updateUserInfo();
+            }
+
+            // Hide payment modal
+            this.hidePaymentForm();
+            
+            // Show result animation
+            if (transaction.status === 'completed') {
+                this.showSuccessModal(transaction);
+            } else {
+                this.showFailureModal(transaction);
+            }
+
+            // Reload transactions
+            this.loadTransactions();
+            
+        } catch (error) {
+            this.showToast('Payment failed: ' + error.message, 'error');
+        } finally {
+            this.hideButtonLoading(form.querySelector('button[type="submit"]'));
+        }
+    }
+
+    validatePin(pin) {
+        return pin === '1234'; // Demo PIN validation
+    }
+
+    async simulatePayment() {
+        return new Promise(resolve => {
+            setTimeout(resolve, 2000); // Simulate 2 second processing
+        });
+    }
+
+    generateTransactionId() {
+        return 'UPI' + Date.now() + Math.floor(Math.random() * 1000);
+    }
+
+    // Transaction management
+    saveTransaction(transaction) {
+        let transactions = JSON.parse(localStorage.getItem('payease_transactions')) || [];
+        transactions.unshift(transaction);
+        localStorage.setItem('payease_transactions', JSON.stringify(transactions));
+    }
+
+    loadTransactions() {
+        const transactions = JSON.parse(localStorage.getItem('payease_transactions')) || [];
+        this.displayTransactions(transactions);
+    }
+
+    displayTransactions(transactions) {
+        const transactionsList = document.getElementById('transactionsList');
+        if (!transactionsList) return;
+
+        if (transactions.length === 0) {
+            transactionsList.innerHTML = `
+                <div class="text-center py-4">
+                    <i class="fas fa-history fa-2x text-muted mb-3"></i>
+                    <p class="text-muted">No transactions yet</p>
+                    <button class="btn btn-outline-primary btn-sm" onclick="showPaymentForm()">
+                        Make your first payment
+                    </button>
+                </div>
+            `;
+            return;
+        }
+
+        transactionsList.innerHTML = transactions.slice(0, 10).map(transaction => `
+            <div class="transaction-item">
+                <div class="transaction-icon ${transaction.type}">
+                    <i class="fas ${transaction.type === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
+                </div>
+                <div class="transaction-details">
+                    <h6>${transaction.type === 'sent' ? 'Sent to' : 'Received from'} ${transaction.toUpiId || 'Unknown'}</h6>
+                    <p class="text-muted mb-0">
+                        <small>${this.formatDate(transaction.timestamp)}</small>
+                        ${transaction.description ? `<br><small>${transaction.description}</small>` : ''}
+                    </p>
+                </div>
+                <div class="transaction-amount">
+                    <div class="amount ${transaction.type === 'sent' ? 'text-danger' : 'text-success'}">
+                        ${transaction.type === 'sent' ? '-' : '+'}₹${transaction.amount.toFixed(2)}
+                    </div>
+                    <span class="status ${transaction.status}">${this.capitalizeFirst(transaction.status)}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // UI Helpers
+    updateUserInfo() {
+        if (!this.currentUser) return;
+
+        const profileName = document.getElementById('profileName');
+        const profilePhone = document.getElementById('profilePhone');
+        const balanceAmount = document.getElementById('balanceAmount');
+        const userInfo = document.getElementById('userInfo');
+
+        if (profileName) profileName.textContent = this.currentUser.name;
+        if (profilePhone) profilePhone.textContent = `+91 ${this.currentUser.phone}`;
+        if (balanceAmount) balanceAmount.textContent = `₹${this.currentUser.balance.toLocaleString()}`;
+        if (userInfo) {
+            userInfo.textContent = this.currentUser.name;
+            userInfo.style.display = 'inline';
+        }
+
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) logoutBtn.style.display = 'inline-block';
+    }
+
+    // Modal handlers
+    showPaymentForm() {
+        const modal = document.getElementById('paymentModal');
+        if (modal) {
+            modal.style.display = 'flex';
+            modal.classList.add('fade-in');
+        }
+    }
+
+    hidePaymentForm() {
+        const modal = document.getElementById('paymentModal');
+        if (modal) {
+            modal.style.display = 'none';
+            modal.classList.remove('fade-in');
+        }
+        // Reset form
+        const form = document.getElementById('paymentForm');
+        if (form) form.reset();
+    }
+
+    showSuccessModal(transaction) {
+        const modal = document.getElementById('successModal');
+        if (modal) {
+            document.getElementById('successAmount').textContent = `₹${transaction.amount}`;
+            document.getElementById('successRecipient').textContent = transaction.toUpiId;
+            document.getElementById('successRef').textContent = transaction.id;
+            
+            modal.style.display = 'flex';
+            modal.classList.add('fade-in');
+        }
+    }
+
+    hideSuccessModal() {
+        const modal = document.getElementById('successModal');
+        if (modal) {
+            modal.style.display = 'none';
+            modal.classList.remove('fade-in');
+        }
+    }
+
+    showFailureModal(transaction) {
+        const modal = document.getElementById('failureModal');
+        if (modal) {
+            document.getElementById('failureRef').textContent = transaction.id;
+            
+            modal.style.display = 'flex';
+            modal.classList.add('fade-in');
+        }
+    }
+
+    hideFailureModal() {
+        const modal = document.getElementById('failureModal');
+        if (modal) {
+            modal.style.display = 'none';
+            modal.classList.remove('fade-in');
+        }
+    }
+
+    // Toast notifications
+    showToast(message, type = 'info') {
+        const toastContainer = document.querySelector('.toast-container');
+        if (!toastContainer) return;
+
+        const toastId = 'toast-' + Date.now();
+        const toast = document.createElement('div');
+        toast.id = toastId;
+        toast.className = 'toast show';
+        toast.innerHTML = `
+            <div class="toast-header">
+                <div class="toast-icon ${type}"></div>
+                <strong class="toast-title me-auto">PayEase</strong>
+                <button type="button" class="btn-close" onclick="this.closest('.toast').remove()"></button>
+            </div>
+            <div class="toast-body">${message}</div>
+        `;
+
+        toastContainer.appendChild(toast);
+
+        // Auto remove after 5 seconds
+        setTimeout(() => {
+            const toastElement = document.getElementById(toastId);
+            if (toastElement) {
+                toastElement.remove();
+            }
+        }, 5000);
+    }
+
+    // Button loading states
+    showButtonLoading(button) {
+        if (!button) return;
+        const btnText = button.querySelector('.btn-text');
+        const btnLoader = button.querySelector('.btn-loader');
+        
+        if (btnText) btnText.style.display = 'none';
+        if (btnLoader) btnLoader.style.display = 'block';
+        button.disabled = true;
+    }
+
+    hideButtonLoading(button) {
+        if (!button) return;
+        const btnText = button.querySelector('.btn-text');
+        const btnLoader = button.querySelector('.btn-loader');
+        
+        if (btnText) btnText.style.display = 'inline';
+        if (btnLoader) btnLoader.style.display = 'none';
+        button.disabled = false;
+    }
+
+    // Utility functions
+    formatDate(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffTime = Math.abs(now - date);
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+            return date.toLocaleTimeString('en-IN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+        } else if (diffDays === 1) {
+            return 'Yesterday';
+        } else if (diffDays < 7) {
+            return date.toLocaleDateString('en-IN', { weekday: 'long' });
+        } else {
+            return date.toLocaleDateString('en-IN', {
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric'
+            });
+        }
+    }
+
+    capitalizeFirst(str) {
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    // Logout
+    handleLogout() {
+        localStorage.removeItem('payease_user');
+        localStorage.removeItem('payease_transactions');
+        this.currentUser = null;
+        this.showLogin();
+        this.showToast('Logged out successfully', 'info');
+        
+        // Hide user info
+        const userInfo = document.getElementById('userInfo');
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (userInfo) userInfo.style.display = 'none';
+        if (logoutBtn) logoutBtn.style.display = 'none';
+    }
 }
 
-// Show/Hide sections
+// Global functions for HTML onclick handlers
 function showLogin() {
-    hideAllSections();
-    document.getElementById('loginSection').style.display = 'block';
+    app.showLogin();
 }
 
-function showRegistration() {
-    hideAllSections();
-    document.getElementById('registrationSection').style.display = 'block';
-}
-
-function showDashboard() {
-    hideAllSections();
-    document.getElementById('dashboardSection').style.display = 'block';
-    document.getElementById('testDashboard').style.display = 'block';
-    document.getElementById('userInfo').style.display = 'inline';
-    document.getElementById('logoutBtn').style.display = 'inline-block';
-    document.getElementById('userInfo').textContent = `Welcome, ${currentUser.name || 'User'}`;
-}
-
-function hideAllSections() {
-    const sections = ['loginSection', 'registrationSection', 'dashboardSection', 'testDashboard'];
-    sections.forEach(section => {
-        document.getElementById(section).style.display = 'none';
-    });
-    document.getElementById('userInfo').style.display = 'none';
-    document.getElementById('logoutBtn').style.display = 'none';
+function showSignup() {
+    app.showSignup();
 }
 
 function showPaymentForm() {
-    document.getElementById('paymentSection').style.display = 'block';
+    app.showPaymentForm();
 }
 
 function hidePaymentForm() {
-    document.getElementById('paymentSection').style.display = 'none';
+    app.hidePaymentForm();
 }
 
-function generateQR() {
-    document.getElementById('qrSection').style.display = 'block';
+function showRequestForm() {
+    app.showToast('Request Money feature coming soon!', 'info');
 }
 
-function hideQRForm() {
-    document.getElementById('qrSection').style.display = 'none';
-    document.getElementById('qrDisplay').style.display = 'none';
+function showQRCode() {
+    app.showToast('QR Code feature coming soon!', 'info');
 }
 
-// API helper function
-async function apiRequest(endpoint, options = {}) {
-    const config = {
-        headers: {
-            'Content-Type': 'application/json',
-            ...(authToken && { 'Authorization': `Bearer ${authToken}` })
-        },
-        ...options
-    };
-    
+function showHistory() {
+    app.loadTransactions();
+    app.showToast('Transaction history refreshed', 'info');
+}
+
+function loadTransactions() {
+    app.loadTransactions();
+}
+
+function setAmount(amount) {
+    const amountInput = document.getElementById('amount');
+    if (amountInput) {
+        amountInput.value = amount;
+    }
+}
+
+function hideSuccessModal() {
+    app.hideSuccessModal();
+}
+
+function hideFailureModal() {
+    app.hideFailureModal();
+}
+
+// Initialize app when DOM is loaded
+let app;
+document.addEventListener('DOMContentLoaded', () => {
+    app = new PayEaseApp();
+});
+
+// Backend API integration (when available)
+async function createTransaction(transactionData) {
     try {
-        const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
-        const data = await response.json();
+        const response = await fetch('http://localhost:3000/api/transactions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(transactionData)
+        });
         
         if (!response.ok) {
-            throw new Error(data.error || 'An error occurred');
+            throw new Error('Network response was not ok');
         }
         
-        return data;
+        return await response.json();
     } catch (error) {
-        console.error('API Error:', error);
+        console.error('Error creating transaction:', error);
         throw error;
     }
 }
 
-// Handle login
-async function handleLogin(event) {
-    event.preventDefault();
-    
-    const phone = document.getElementById('loginPhone').value;
-    const pin = document.getElementById('loginPin').value;
-    const deviceId = document.getElementById('deviceId').value;
-    
+async function getTransactions() {
     try {
-        showLoading();
-        const response = await apiRequest('/login', {
-            method: 'POST',
-            body: JSON.stringify({ phone, pin, deviceId })
-        });
+        const response = await fetch('http://localhost:3000/api/transactions');
         
-        if (response.requiresOTP) {
-            hideLoading();
-            showAlert('OTP sent to your registered mobile number', 'info');
-            return;
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
         }
         
-        authToken = response.token;
-        currentUser = response.user;
-        
-        localStorage.setItem('authToken', authToken);
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
-        
-        // Hide the loading overlay
-        hideLoading();
-        
-        // Show the transition animation
-        showDashboardTransition();
-        
-        // Wait for transition to complete before showing dashboard
-        setTimeout(() => {
-            showDashboard();
-            loadUserProfile();
-            loadTransactions();
-            showAlert('Login successful!', 'success');
-        }, 1600);
-        
+        return await response.json();
     } catch (error) {
-        hideLoading();
-        showAlert(error.message, 'danger');
-        
-        // Shake the login form to indicate error
-        const loginForm = document.getElementById('loginForm');
-        loginForm.classList.add('shake');
-        setTimeout(() => {
-            loginForm.classList.remove('shake');
-        }, 500);
+        console.error('Error fetching transactions:', error);
+        return [];
     }
 }
-
-// Handle registration
-async function handleRegistration(event) {
-    event.preventDefault();
-    
-    const name = document.getElementById('regName').value;
-    const phone = document.getElementById('regPhone').value;
-    const email = document.getElementById('regEmail').value;
-    const pin = document.getElementById('regPin').value;
-    const deviceId = generateDeviceId();
-    
-    try {
-        showLoading();
-        const response = await apiRequest('/register', {
-            method: 'POST',
-            body: JSON.stringify({ name, phone, email, pin, deviceId })
-        });
-        
-        showAlert(`Registration successful! Your UPI ID: ${response.upiId}`, 'success');
-        showLogin();
-        document.getElementById('registrationForm').reset();
-        
-    } catch (error) {
-        showAlert(error.message, 'danger');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Load user profile
-async function loadUserProfile() {
-    try {
-        const profile = await apiRequest('/profile');
-        
-        // Update balance
-        if (profile.bankAccounts && profile.bankAccounts.length > 0) {
-            document.getElementById('balance').textContent = `₹${profile.bankAccounts[0].balance.toLocaleString()}`;
-        }
-        
-        // Update UPI ID
-        if (profile.upiIds && profile.upiIds.length > 0) {
-            document.getElementById('upiId').textContent = profile.upiIds[0].upiId;
-        }
-        
-    } catch (error) {
-        console.error('Profile load error:', error);
-        showAlert('Failed to load profile', 'warning');
-    }
-}
-
-// Handle payment
-async function handlePayment(event) {
-    event.preventDefault();
-    
-    const toUpiId = document.getElementById('toUpiId').value;
-    const amount = parseFloat(document.getElementById('amount').value);
-    const description = document.getElementById('description').value;
-    const pin = document.getElementById('paymentPin').value;
-    
-    try {
-        showLoading();
-        const response = await apiRequest('/payment', {
-            method: 'POST',
-            body: JSON.stringify({ toUpiId, amount, description, pin })
-        });
-        
-        showAlert(`Payment successful! Transaction ID: ${response.transactionId}`, 'success');
-        document.getElementById('paymentForm').reset();
-        hidePaymentForm();
-        loadUserProfile();
-        loadTransactions();
-        
-    } catch (error) {
-        showAlert(error.message, 'danger');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Handle QR generation
-async function handleQRGeneration(event) {
-    event.preventDefault();
-    
-    const amount = parseFloat(document.getElementById('qrAmount').value);
-    const merchantName = document.getElementById('merchantName').value;
-    
-    try {
-        showLoading();
-        const response = await apiRequest('/generate-qr', {
-            method: 'POST',
-            body: JSON.stringify({ amount, merchantName })
-        });
-        
-        document.getElementById('qrCodeImage').src = response.qrCode;
-        document.getElementById('qrMerchantName').textContent = merchantName;
-        document.getElementById('qrAmountDisplay').textContent = `₹${amount.toLocaleString()}`;
-        document.getElementById('qrInfo').textContent = `Generated on ${new Date().toLocaleString()}`;
-        document.getElementById('qrDisplay').style.display = 'block';
-        
-        // Add a subtle animation to the QR code to draw attention
-        const qrImage = document.getElementById('qrCodeImage');
-        qrImage.style.animation = 'pulse 2s infinite';
-        
-        showAlert(`QR code for ₹${amount} generated successfully!`, 'success');
-        
-    } catch (error) {
-        showAlert(error.message, 'danger');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Load transactions
-async function loadTransactions() {
-    try {
-        const response = await apiRequest('/transactions?page=1&limit=10');
-        displayTransactions(response.transactions);
-    } catch (error) {
-        console.error('Transaction load error:', error);
-        document.getElementById('transactionsList').innerHTML = 
-            '<div class="text-center text-muted">Failed to load transactions</div>';
-    }
-}
-
-// Set amount in payment form
-function setAmount(amount) {
-    document.getElementById('amount').value = amount;
-}
-
-// Set amount in QR form
-function setQRAmount(amount) {
-    document.getElementById('qrAmount').value = amount;
-}
-
-// Filter transactions
-function filterTransactions(type) {
-    // Just reloads all transactions for now and highlights the selected button
-    loadTransactions();
-    
-    // Highlight the selected filter button
-    const buttons = document.querySelectorAll('.transaction-history-card .btn-sm');
-    buttons.forEach(btn => {
-        btn.classList.remove('btn-primary');
-        btn.classList.add('btn-outline-primary', 'btn-outline-success', 'btn-outline-danger');
-    });
-    
-    // Find the clicked button and highlight it
-    const clickedButton = Array.from(buttons).find(btn => btn.textContent.toLowerCase().includes(type));
-    if (clickedButton) {
-        clickedButton.classList.remove('btn-outline-primary', 'btn-outline-success', 'btn-outline-danger');
-        clickedButton.classList.add('btn-primary');
-    }
-}
-
-// Display transactions
-function displayTransactions(transactions) {
-    const container = document.getElementById('transactionsList');
-    
-    if (!transactions || transactions.length === 0) {
-        container.innerHTML = `
-            <div class="text-center py-4">
-                <i class="fas fa-receipt fa-3x text-muted mb-3"></i>
-                <p class="text-muted">No transactions found</p>
-            </div>
-        `;
-        return;
-    }
-    
-    const transactionHTML = transactions.map((transaction, index) => {
-        const isCredit = transaction.toUserId === currentUser.id;
-        const statusClass = transaction.status === 'SUCCESS' ? 'success' : 
-                           transaction.status === 'FAILED' ? 'failed' : 'pending';
-        
-        // Format date nicely
-        const txDate = new Date(transaction.createdAt);
-        const formattedDate = txDate.toLocaleDateString();
-        const formattedTime = txDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
-        // Get appropriate icon based on transaction type
-        const getTypeIcon = () => {
-            if (isCredit) return '<i class="fas fa-arrow-down"></i>';
-            return '<i class="fas fa-arrow-up"></i>';
-        };
-        
-        return `
-            <div class="transaction-item transaction-${statusClass}" style="animation-delay: ${index * 0.05}s">
-                <div class="d-flex justify-content-between align-items-start">
-                    <div>
-                        <h6 class="mb-1">
-                            ${isCredit ? 'Received from' : 'Sent to'} 
-                            ${isCredit ? (transaction.fromUpiId || 'Unknown') : transaction.toUpiId}
-                        </h6>
-                        <p class="mb-1 transaction-meta">
-                            <i class="fas fa-comment-alt"></i>
-                            ${transaction.description || 'No description'}
-                        </p>
-                        <div class="transaction-meta">
-                            <i class="far fa-clock"></i>
-                            ${formattedDate} at ${formattedTime}
-                        </div>
-                    </div>
-                    <div class="text-end">
-                        <div class="amount-display ${isCredit ? 'amount-credit' : 'amount-debit'}">
-                            ${isCredit ? '+' : '-'}₹${transaction.amount.toLocaleString()}
-                        </div>
-                        <span class="status-badge badge bg-${statusClass === 'success' ? 'success' : statusClass === 'failed' ? 'danger' : 'warning'}">
-                            ${getTypeIcon()} ${transaction.status}
-                        </span>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-    
-    container.innerHTML = transactionHTML;
-}
-
-// Set recipient in payment form
-function setRecipient(upiId) {
-    document.getElementById('toUpiId').value = upiId;
-    showPaymentForm();
-}
-
-// Handle logout
-function handleLogout() {
-    authToken = null;
-    currentUser = {};
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('currentUser');
-    showLogin();
-    showAlert('Logged out successfully', 'info');
-}
-
-// Show alert
-function showAlert(message, type = 'info') {
-    const alertContainer = document.getElementById('alertContainer');
-    const alertId = 'alert_' + Date.now();
-    
-    const alertHTML = `
-        <div id="${alertId}" class="alert alert-${type} alert-dismissible fade show alert-slide-in" role="alert">
-            <i class="fas fa-${getAlertIcon(type)} me-2"></i>
-            ${message}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    `;
-    
-    alertContainer.insertAdjacentHTML('beforeend', alertHTML);
-    
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-        const alert = document.getElementById(alertId);
-        if (alert) {
-            alert.remove();
-        }
-    }, 5000);
-}
-
-function getAlertIcon(type) {
-    const icons = {
-        success: 'check-circle',
-        danger: 'exclamation-circle',
-        warning: 'exclamation-triangle',
-        info: 'info-circle'
-    };
-    return icons[type] || 'info-circle';
-}
-
-// Loading state
-function showLoading() {
-    // Create loading overlay if it doesn't exist
-    let loadingOverlay = document.getElementById('loadingOverlay');
-    if (!loadingOverlay) {
-        loadingOverlay = document.createElement('div');
-        loadingOverlay.id = 'loadingOverlay';
-        loadingOverlay.innerHTML = `
-            <div class="loading-content">
-                <div class="loading-spinner-large"></div>
-                <p class="loading-text">Processing...</p>
-            </div>
-        `;
-        document.body.appendChild(loadingOverlay);
-    }
-    
-    // Show the overlay
-    loadingOverlay.style.display = 'flex';
-    
-    // Apply body styles
-    document.body.style.overflow = 'hidden';
-}
-
-function hideLoading() {
-    // Hide the overlay
-    const loadingOverlay = document.getElementById('loadingOverlay');
-    if (loadingOverlay) {
-        loadingOverlay.style.display = 'none';
-    }
-    
-    // Restore body styles
-    document.body.style.overflow = '';
-}
-
-// Show a loading animation for dashboard transition
-function showDashboardTransition() {
-    const transitionOverlay = document.createElement('div');
-    transitionOverlay.id = 'dashboardTransition';
-    transitionOverlay.className = 'transition-overlay';
-    
-    transitionOverlay.innerHTML = `
-        <div class="transition-content">
-            <div class="app-logo">
-                <i class="fas fa-mobile-alt"></i>
-            </div>
-            <h2 class="welcome-message">Welcome, ${currentUser.name || 'User'}</h2>
-            <div class="loading-bar">
-                <div class="loading-progress"></div>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(transitionOverlay);
-    
-    // Animate the progress bar
-    setTimeout(() => {
-        const progressBar = document.querySelector('.loading-progress');
-        progressBar.style.width = '100%';
-    }, 100);
-    
-    // Remove the overlay after animation
-    setTimeout(() => {
-        transitionOverlay.classList.add('fade-out');
-        setTimeout(() => {
-            document.body.removeChild(transitionOverlay);
-        }, 500);
-    }, 1500);
-}
-
-// Test case execution
-async function runTestCase(testId) {
-    const testCases = {
-        'TC01': () => testUPIPinValidation(),
-        'TC04': () => testInvalidUPIIdFormat(),
-        'TC05': () => testMinBoundaryAmount(),
-        'TC06': () => testMaxBoundaryAmount(),
-        'TC11': () => testSessionTimeout()
-    };
-    
-    const testFunction = testCases[testId];
-    if (testFunction) {
-        await testFunction();
-    }
-}
-
-// Test case implementations
-async function testUPIPinValidation() {
-    const testResults = document.getElementById('testResults');
-    
-    // Clear placeholder if it exists
-    const placeholder = document.querySelector('.test-placeholder');
-    if (placeholder) placeholder.remove();
-    
-    // Add running indicator
-    const runningId = 'running_' + Date.now();
-    testResults.innerHTML = `
-        <div id="${runningId}" class="test-result">
-            <div class="d-flex align-items-center">
-                <div class="loading-spinner me-3"></div>
-                <div>
-                    <h6 class="mb-1">Running TC01: UPI PIN Validation</h6>
-                    <small class="text-muted">Testing invalid PIN rejection...</small>
-                </div>
-            </div>
-        </div>
-    ` + testResults.innerHTML;
-    
-    try {
-        // Test with incorrect PIN
-        await apiRequest('/payment', {
-            method: 'POST',
-            body: JSON.stringify({
-                toUpiId: '9876543210@simulator',
-                amount: 100,
-                description: 'Test payment',
-                pin: '0000' // Wrong PIN
-            })
-        });
-        
-        // Should not reach here
-        document.getElementById(runningId).remove();
-        testResults.innerHTML = `
-            <div class="test-result failed">
-                <div class="d-flex align-items-center">
-                    <i class="fas fa-times-circle fa-2x me-3 text-danger"></i>
-                    <div>
-                        <h6 class="mb-1">TC01 FAILED</h6>
-                        <p class="mb-0">Invalid PIN was accepted by the system</p>
-                        <small class="text-muted">Expected: PIN rejection | Actual: PIN accepted</small>
-                    </div>
-                </div>
-            </div>
-        ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
-    } catch (error) {
-        document.getElementById(runningId).remove();
-        if (error.message.includes('Invalid PIN')) {
-            testResults.innerHTML = `
-                <div class="test-result passed">
-                    <div class="d-flex align-items-center">
-                        <i class="fas fa-check-circle fa-2x me-3 text-success"></i>
-                        <div>
-                            <h6 class="mb-1">TC01 PASSED</h6>
-                            <p class="mb-0">Invalid PIN correctly rejected</p>
-                            <small class="text-muted">Expected: PIN rejection | Actual: "${error.message}"</small>
-                        </div>
-                    </div>
-                </div>
-            ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
-        } else {
-            testResults.innerHTML = `
-                <div class="test-result failed">
-                    <div class="d-flex align-items-center">
-                        <i class="fas fa-exclamation-triangle fa-2x me-3 text-warning"></i>
-                        <div>
-                            <h6 class="mb-1">TC01 FAILED</h6>
-                            <p class="mb-0">Unexpected error occurred</p>
-                            <small class="text-muted">${error.message}</small>
-                        </div>
-                    </div>
-                </div>
-            ` + testResults.innerHTML.replace(`<div id="${runningId}">`, '');
-        }
-    }
-}
-
-async function testInvalidUPIIdFormat() {
-    const testResults = document.getElementById('testResults');
-    testResults.innerHTML += '<div class="test-result">Running TC04: Invalid UPI ID Format...</div>';
-    
-    try {
-        await apiRequest('/payment', {
-            method: 'POST',
-            body: JSON.stringify({
-                toUpiId: 'user@xyz#', // Invalid format
-                amount: 100,
-                description: 'Test payment',
-                pin: 'password'
-            })
-        });
-        
-        testResults.innerHTML += '<div class="test-result failed">TC04 FAILED: Invalid UPI ID format accepted</div>';
-    } catch (error) {
-        if (error.message.includes('Invalid UPI ID format')) {
-            testResults.innerHTML += '<div class="test-result passed">TC04 PASSED: Invalid UPI ID format correctly rejected</div>';
-        } else {
-            testResults.innerHTML += '<div class="test-result failed">TC04 FAILED: Unexpected error: ' + error.message + '</div>';
-        }
-    }
-}
-
-async function testMinBoundaryAmount() {
-    const testResults = document.getElementById('testResults');
-    testResults.innerHTML += '<div class="test-result">Running TC05: Min Boundary Amount...</div>';
-    
-    try {
-        const response = await apiRequest('/payment', {
-            method: 'POST',
-            body: JSON.stringify({
-                toUpiId: '9876543211@simulator',
-                amount: 0.01, // Minimum amount
-                description: 'Boundary test',
-                pin: 'password'
-            })
-        });
-        
-        if (response.status === 'SUCCESS') {
-            testResults.innerHTML += '<div class="test-result passed">TC05 PASSED: Minimum amount (₹0.01) accepted</div>';
-        } else {
-            testResults.innerHTML += '<div class="test-result failed">TC05 FAILED: Minimum amount rejected</div>';
-        }
-    } catch (error) {
-        testResults.innerHTML += '<div class="test-result failed">TC05 FAILED: ' + error.message + '</div>';
-    }
-}
-
-async function testMaxBoundaryAmount() {
-    const testResults = document.getElementById('testResults');
-    testResults.innerHTML += '<div class="test-result">Running TC06: Max Boundary Amount...</div>';
-    
-    try {
-        await apiRequest('/payment', {
-            method: 'POST',
-            body: JSON.stringify({
-                toUpiId: '9876543211@simulator',
-                amount: 200001, // Above limit
-                description: 'Boundary test',
-                pin: 'password'
-            })
-        });
-        
-        testResults.innerHTML += '<div class="test-result failed">TC06 FAILED: Amount above limit accepted</div>';
-    } catch (error) {
-        if (error.message.includes('exceeds daily limit')) {
-            testResults.innerHTML += '<div class="test-result passed">TC06 PASSED: Amount above limit correctly rejected</div>';
-        } else {
-            testResults.innerHTML += '<div class="test-result failed">TC06 FAILED: Unexpected error: ' + error.message + '</div>';
-        }
-    }
-}
-
-async function testSessionTimeout() {
-    const testResults = document.getElementById('testResults');
-    testResults.innerHTML += '<div class="test-result">Running TC11: Session Timeout (simulated)...</div>';
-    
-    // This is a simulated test since we can't wait 5 minutes
-    testResults.innerHTML += '<div class="test-result passed">TC11 PASSED: Session timeout implemented (5 min idle timeout)</div>';
-}
-
-// Export functions for testing
-window.UPISimulator = {
-    runTestCase,
-    apiRequest,
-    showAlert
-};
