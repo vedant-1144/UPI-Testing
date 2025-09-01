@@ -71,7 +71,7 @@ async function createTables() {
     try {
         await client.query('BEGIN');
 
-        // Create users table (don't drop if exists to preserve data)
+        // Create users table with all required columns
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -89,20 +89,13 @@ async function createTables() {
             )
         `);
 
-        // Add new columns to existing users table if they don't exist
-        await client.query(`
-            ALTER TABLE users 
-            ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS last_failed_login TIMESTAMP WITH TIME ZONE,
-            ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP WITH TIME ZONE
-        `);
-
-        // Create transactions table (don't drop if exists to preserve data)
+        // Create transactions table with all required columns
         await client.query(`
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
-                reference_id VARCHAR(50) UNIQUE NOT NULL,
+                reference_id VARCHAR(50) NOT NULL,
                 from_user_id INTEGER REFERENCES users(id),
+                to_user_id INTEGER REFERENCES users(id),
                 to_upi_id VARCHAR(255) NOT NULL,
                 amount DECIMAL(12,2) NOT NULL,
                 description TEXT,
@@ -116,11 +109,12 @@ async function createTables() {
         await client.query('CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)');
         await client.query('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)');
         await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_from_user ON transactions(from_user_id)');
+        await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_to_user ON transactions(to_user_id)');
         await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_ref ON transactions(reference_id)');
         await client.query('CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)');
 
         await client.query('COMMIT');
-        console.log('✅ Database tables verified/created');
+        console.log('✅ Database tables created successfully');
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('❌ Database setup failed:', error.message);
@@ -731,28 +725,61 @@ app.post('/api/transactions', async (req, res) => {
                     oldBalance: recipientBalance, 
                     newBalance: newRecipientBalance 
                 });
-
-                // Insert credit transaction for recipient
-                await client.query(
-                    'INSERT INTO transactions (reference_id, from_user_id, to_upi_id, amount, description, status, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                    [referenceId + '_CREDIT', recipient.id, sender.phone, transactionAmount, description || 'Money received', transactionStatus, 'CREDIT']
-                );
             }
 
-            // Insert debit transaction for sender
-            const transactionResult = await client.query(
-                'INSERT INTO transactions (reference_id, from_user_id, to_upi_id, amount, description, status, transaction_type) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-                [referenceId, fromUserId, toUpiId, transactionAmount, description || '', transactionStatus, 'DEBIT']
+            // Insert transaction records for both sender and receiver
+            // 1. Insert DEBIT transaction for sender
+            const senderTransactionResult = await client.query(
+                `INSERT INTO transactions 
+                 (reference_id, from_user_id, to_user_id, to_upi_id, amount, description, status, transaction_type) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+                 RETURNING *`,
+                [
+                    referenceId, 
+                    fromUserId, 
+                    recipient ? recipient.id : null, 
+                    toUpiId, 
+                    transactionAmount, 
+                    description || '', 
+                    transactionStatus, 
+                    'DEBIT'
+                ]
             );
+
+            // 2. Insert CREDIT transaction for recipient (if they exist in our system)
+            if (recipient) {
+                await client.query(
+                    `INSERT INTO transactions 
+                     (reference_id, from_user_id, to_user_id, to_upi_id, amount, description, status, transaction_type) 
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    [
+                        referenceId, 
+                        fromUserId, 
+                        recipient.id, 
+                        sender.phone + '@payease', // Sender's UPI ID for receiver's view
+                        transactionAmount, 
+                        description || 'Money received', 
+                        transactionStatus, 
+                        'CREDIT'
+                    ]
+                );
+
+                console.log('💳 Credit transaction created for recipient:', { 
+                    recipientId: recipient.id, 
+                    amount: transactionAmount,
+                    referenceId: referenceId
+                });
+            }
 
             await client.query('COMMIT');
 
-            const transaction = transactionResult.rows[0];
+            const transaction = senderTransactionResult.rows[0];
             
             console.log('✅ Transaction completed:', { 
                 referenceId, 
                 senderNewBalance: newSenderBalance,
-                recipientNewBalance: recipient ? newRecipientBalance : 'External'
+                recipientNewBalance: recipient ? newRecipientBalance : 'External',
+                bothEntriesCreated: recipient ? 'Yes' : 'Sender only (external transfer)'
             });
 
             res.json({
@@ -763,6 +790,7 @@ app.post('/api/transactions', async (req, res) => {
                     referenceId: transaction.reference_id,
                     amount: parseFloat(transaction.amount),
                     toUpiId: transaction.to_upi_id,
+                    toUserId: transaction.to_user_id,
                     description: transaction.description,
                     status: transaction.status,
                     timestamp: transaction.created_at
@@ -774,7 +802,9 @@ app.post('/api/transactions', async (req, res) => {
                     },
                     recipient: recipient ? {
                         previous: recipientBalance,
-                        current: newRecipientBalance
+                        current: newRecipientBalance,
+                        name: recipient.name,
+                        phone: recipient.phone
                     } : null
                 }
             });
@@ -847,50 +877,67 @@ app.get('/api/transactions/:userId', async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const offset = parseInt(req.query.offset) || 0;
 
-        // Get both sent and received transactions
+        console.log('📊 Fetching transactions for user:', userId);
+
+        // Get all transactions where user is either sender or receiver
         const result = await pool.query(
             `SELECT t.*, 
                     CASE 
-                        WHEN t.from_user_id = $1 THEN 'sent'
-                        ELSE 'received'
+                        WHEN t.from_user_id = $1 AND t.transaction_type = 'DEBIT' THEN 'sent'
+                        WHEN t.to_user_id = $1 AND t.transaction_type = 'CREDIT' THEN 'received'
+                        ELSE 'unknown'
                     END as transaction_direction,
-                    u_from.name as from_name,
-                    u_from.phone as from_phone
+                    sender.name as sender_name,
+                    sender.phone as sender_phone,
+                    receiver.name as receiver_name,
+                    receiver.phone as receiver_phone
              FROM transactions t 
-             LEFT JOIN users u_from ON t.from_user_id = u_from.id
-             WHERE t.from_user_id = $1 OR t.to_upi_id IN (
-                 SELECT phone FROM users WHERE id = $1
-                 UNION 
-                 SELECT email FROM users WHERE id = $1
-             )
+             LEFT JOIN users sender ON t.from_user_id = sender.id
+             LEFT JOIN users receiver ON t.to_user_id = receiver.id
+             WHERE (t.from_user_id = $1 AND t.transaction_type = 'DEBIT') 
+                OR (t.to_user_id = $1 AND t.transaction_type = 'CREDIT')
              ORDER BY t.created_at DESC 
              LIMIT $2 OFFSET $3`,
             [userId, limit, offset]
         );
 
-        const transactions = result.rows.map(t => ({
-            id: t.id,
-            referenceId: t.reference_id,
-            amount: parseFloat(t.amount),
-            direction: t.transaction_direction,
-            fromUserId: t.from_user_id,
-            fromName: t.from_name,
-            fromPhone: t.from_phone,
-            toUpiId: t.to_upi_id,
-            description: t.description,
-            status: t.status,
-            type: t.transaction_type,
-            timestamp: t.created_at
-        }));
+        console.log(`📊 Found ${result.rows.length} transactions for user ${userId}`);
+
+        const transactions = result.rows.map(t => {
+            const direction = t.transaction_direction;
+            const isReceived = direction === 'received';
+            
+            return {
+                id: t.id,
+                referenceId: t.reference_id,
+                amount: parseFloat(t.amount),
+                direction: direction,
+                fromUserId: t.from_user_id,
+                toUserId: t.to_user_id,
+                fromName: t.sender_name,
+                fromPhone: t.sender_phone,
+                toName: t.receiver_name,
+                toPhone: t.receiver_phone,
+                toUpiId: t.to_upi_id,
+                description: t.description,
+                status: t.status,
+                type: t.transaction_type,
+                timestamp: t.created_at,
+                // Additional helper fields for frontend
+                displayName: isReceived ? (t.sender_name || 'Unknown Sender') : t.to_upi_id,
+                displayPhone: isReceived ? t.sender_phone : t.receiver_phone
+            };
+        });
 
         res.json({
             success: true,
             transactions,
-            hasMore: result.rows.length === limit
+            hasMore: result.rows.length === limit,
+            total: result.rows.length
         });
 
     } catch (error) {
-        console.error('Transactions fetch error:', error);
+        console.error('❌ Transactions fetch error:', error);
         res.status(500).json({ 
             success: false, 
             message: 'Failed to fetch transactions' 

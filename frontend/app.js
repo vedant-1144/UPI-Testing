@@ -379,14 +379,25 @@ class PayEaseApp {
         }
 
         transactionsList.innerHTML = transactions.slice(0, 10).map(transaction => {
-            // Use the direction field from backend or determine based on user ID
-            const direction = transaction.direction || (transaction.fromUserId === this.currentUser.id ? 'sent' : 'received');
+            // Use the direction field from backend
+            const direction = transaction.direction || 'unknown';
             const amount = parseFloat(transaction.amount);
             
-            // Get proper display names and details
-            const displayName = direction === 'sent' 
-                ? transaction.toUpiId 
-                : (transaction.fromName || transaction.fromPhone || 'Unknown');
+            // Get proper display names and details based on transaction direction
+            let displayName, displayDetail;
+            
+            if (direction === 'sent') {
+                // For sent transactions, show recipient info
+                displayName = transaction.toName || transaction.toUpiId || 'Unknown Recipient';
+                displayDetail = transaction.toPhone ? `${transaction.toPhone}` : transaction.toUpiId;
+            } else if (direction === 'received') {
+                // For received transactions, show sender info
+                displayName = transaction.fromName || transaction.displayName || 'Unknown Sender';
+                displayDetail = transaction.fromPhone ? `${transaction.fromPhone}` : 'Unknown';
+            } else {
+                displayName = 'Unknown';
+                displayDetail = 'Transaction details unavailable';
+            }
             
             // Use correct timestamp field
             const timestamp = transaction.timestamp || transaction.created_at;
@@ -394,18 +405,23 @@ class PayEaseApp {
             return `
                 <div class="transaction-item">
                     <div class="transaction-icon ${direction}">
-                        <i class="fas ${direction === 'sent' ? 'fa-arrow-up' : 'fa-arrow-down'}"></i>
+                        <i class="fas ${direction === 'sent' ? 'fa-arrow-up' : direction === 'received' ? 'fa-arrow-down' : 'fa-question'}"></i>
                     </div>
                     <div class="transaction-details">
-                        <h6>${direction === 'sent' ? 'Sent to' : 'Received from'} ${displayName}</h6>
+                        <h6>
+                            ${direction === 'sent' ? 'Sent to' : direction === 'received' ? 'Received from' : 'Transaction with'} 
+                            ${displayName}
+                        </h6>
                         <p class="text-muted mb-0">
                             <small>${this.formatDate(timestamp)}</small>
-                            ${transaction.description ? `<br><small>${transaction.description}</small>` : ''}
+                            ${displayDetail ? `<br><small>${displayDetail}</small>` : ''}
+                            ${transaction.description ? `<br><small class="text-info">"${transaction.description}"</small>` : ''}
+                            <br><small class="text-secondary">Ref: ${transaction.referenceId}</small>
                         </p>
                     </div>
                     <div class="transaction-amount">
-                        <div class="amount ${direction === 'sent' ? 'text-danger' : 'text-success'}">
-                            ${direction === 'sent' ? '-' : '+'}₹${amount.toFixed(2)}
+                        <div class="amount ${direction === 'sent' ? 'text-danger' : direction === 'received' ? 'text-success' : 'text-muted'}">
+                            ${direction === 'sent' ? '-' : direction === 'received' ? '+' : ''}₹${amount.toFixed(2)}
                         </div>
                         <span class="status ${transaction.status.toLowerCase()}">${this.capitalizeFirst(transaction.status)}</span>
                     </div>
