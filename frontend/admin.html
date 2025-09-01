@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PayEase Admin Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .locked-account { 
+            border: 1px solid #ddd; 
+            padding: 15px; 
+            margin: 10px 0; 
+            border-radius: 5px; 
+        }
+        .unlock-btn { 
+            background: #28a745; 
+            color: white; 
+            border: none; 
+            padding: 8px 16px; 
+            border-radius: 4px; 
+            cursor: pointer; 
+        }
+        .unlock-btn:hover { background: #218838; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 PayEase Admin Panel</h1>
+        
+        <h2>Locked Accounts</h2>
+        <button onclick="loadLockedAccounts()">🔄 Refresh Locked Accounts</button>
+        <div id="lockedAccounts"></div>
+        
+        <h2>Manual Unlock</h2>
+        <input type="text" id="phoneNumber" placeholder="Enter phone number" />
+        <button onclick="unlockAccount()">🔓 Unlock Account</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function loadLockedAccounts() {
+            try {
+                const response = await fetch('/api/admin/locked-accounts');
+                const data = await response.json();
+                
+                const container = document.getElementById('lockedAccounts');
+                
+                if (data.success && data.lockedAccounts.length > 0) {
+                    container.innerHTML = data.lockedAccounts.map(account => `
+                        <div class="locked-account">
+                            <h3>${account.name} (${account.phone})</h3>
+                            <p><strong>Email:</strong> ${account.email}</p>
+                            <p><strong>Failed Attempts:</strong> ${account.failedAttempts}</p>
+                            <p><strong>Locked At:</strong> ${new Date(account.lockedAt).toLocaleString()}</p>
+                            <button class="unlock-btn" onclick="unlockSpecificAccount('${account.phone}')">
+                                🔓 Unlock ${account.name}
+                            </button>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = '<p>✅ No locked accounts found</p>';
+                }
+            } catch (error) {
+                document.getElementById('lockedAccounts').innerHTML = 
+                    '<p style="color: red;">❌ Error loading locked accounts</p>';
+            }
+        }
+
+        async function unlockAccount() {
+            const phone = document.getElementById('phoneNumber').value;
+            if (!phone) {
+                alert('Please enter a phone number');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/admin/unlock-account', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: phone })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('result').innerHTML = 
+                        `<p style="color: green;">✅ ${data.message}</p>`;
+                    document.getElementById('phoneNumber').value = '';
+                    loadLockedAccounts(); // Refresh the list
+                } else {
+                    document.getElementById('result').innerHTML = 
+                        `<p style="color: red;">❌ ${data.message}</p>`;
+                }
+            } catch (error) {
+                document.getElementById('result').innerHTML = 
+                    '<p style="color: red;">❌ Error unlocking account</p>';
+            }
+        }
+
+        async function unlockSpecificAccount(phone) {
+            if (confirm(`Are you sure you want to unlock account: ${phone}?`)) {
+                document.getElementById('phoneNumber').value = phone;
+                await unlockAccount();
+            }
+        }
+
+        // Load locked accounts on page load
+        window.onload = loadLockedAccounts;
+    </script>
+</body>
+</html>

@@ -253,13 +253,28 @@ class PayEaseApp {
         e.preventDefault();
         const form = e.target;
         
-        const toUpiId = document.getElementById('toUpiId').value;
+        // Get recipient selection type
+        const recipientType = document.querySelector('input[name="recipientType"]:checked').value;
+        let toUserId = null;
+        let toUpiId = null;
+        
+        if (recipientType === 'select') {
+            toUserId = document.getElementById('toUserId').value;
+            // Get UPI ID from selected user (we'll construct it)
+            const selectedOption = document.querySelector('#toUserId option:checked');
+            if (selectedOption && selectedOption.dataset.phone) {
+                toUpiId = `${selectedOption.dataset.phone}@payease`;
+            }
+        } else {
+            toUpiId = document.getElementById('toUpiId').value;
+        }
+        
         const amount = parseFloat(document.getElementById('amount').value);
         const description = document.getElementById('description').value;
         const pin = document.getElementById('paymentPin').value;
 
         // Validate inputs
-        if (!toUpiId || !amount || !pin) {
+        if ((!toUserId && !toUpiId) || !amount || !pin) {
             this.showToast('Please fill all required fields', 'error');
             return;
         }
@@ -272,26 +287,29 @@ class PayEaseApp {
         this.showButtonLoading(form.querySelector('button[type="submit"]'));
 
         try {
-            console.log('Sending payment request:', {
+            const paymentData = {
                 fromUserId: this.currentUser.id,
-                toUpiId: toUpiId,
                 amount: amount,
                 description: description,
-                hasPin: !!pin
-            });
+                pin: pin
+            };
+            
+            // Add recipient info based on selection type
+            if (toUserId) {
+                paymentData.toUserId = parseInt(toUserId);
+                paymentData.toUpiId = toUpiId; // Keep UPI ID for display
+            } else {
+                paymentData.toUpiId = toUpiId;
+            }
+            
+            console.log('Sending payment request:', paymentData);
 
             const response = await fetch(`${this.apiBaseUrl}/api/transactions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    fromUserId: this.currentUser.id,
-                    toUpiId: toUpiId,
-                    amount: amount,
-                    description: description,
-                    pin: pin
-                })
+                body: JSON.stringify(paymentData)
             });
 
             console.log('Payment response status:', response.status);
@@ -457,6 +475,11 @@ class PayEaseApp {
         if (modal) {
             modal.style.display = 'flex';
             modal.classList.add('fade-in');
+            
+            // Initialize payment form after showing modal
+            setTimeout(() => {
+                this.initPaymentForm();
+            }, 100);
         }
     }
 
@@ -621,6 +644,66 @@ class PayEaseApp {
             console.error('Failed to refresh balance:', error);
         }
     }
+
+    // Load available users for recipient selection
+    async loadUsers() {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/users?excludeUserId=${this.currentUser.id}`);
+            const data = await response.json();
+            
+            if (data.success) {
+                const userSelect = document.getElementById('toUserId');
+                userSelect.innerHTML = '<option value="">Select recipient...</option>';
+                
+                data.users.forEach(user => {
+                    const option = document.createElement('option');
+                    option.value = user.id;
+                    option.textContent = `${user.name} (${user.phone})`;
+                    option.dataset.phone = user.phone;
+                    option.dataset.email = user.email;
+                    userSelect.appendChild(option);
+                });
+            }
+        } catch (error) {
+            console.error('Failed to load users:', error);
+            const userSelect = document.getElementById('toUserId');
+            userSelect.innerHTML = '<option value="">Error loading users</option>';
+        }
+    }
+
+    // Initialize payment form toggles
+    initPaymentForm() {
+        const recipientSelectRadio = document.getElementById('recipientSelect');
+        const recipientManualRadio = document.getElementById('recipientManual');
+        const userSelectionDiv = document.getElementById('userSelectionDiv');
+        const upiInputDiv = document.getElementById('upiInputDiv');
+        const toUserIdSelect = document.getElementById('toUserId');
+        const toUpiIdInput = document.getElementById('toUpiId');
+
+        // Handle recipient type toggle
+        recipientSelectRadio.addEventListener('change', () => {
+            if (recipientSelectRadio.checked) {
+                userSelectionDiv.style.display = 'block';
+                upiInputDiv.style.display = 'none';
+                toUserIdSelect.required = true;
+                toUpiIdInput.required = false;
+                toUpiIdInput.value = '';
+            }
+        });
+
+        recipientManualRadio.addEventListener('change', () => {
+            if (recipientManualRadio.checked) {
+                userSelectionDiv.style.display = 'none';
+                upiInputDiv.style.display = 'block';
+                toUserIdSelect.required = false;
+                toUpiIdInput.required = true;
+                toUserIdSelect.value = '';
+            }
+        });
+
+        // Load users when form is initialized
+        this.loadUsers();
+    }
 }
 
 // Global functions for HTML onclick handlers
@@ -638,6 +721,23 @@ function showPaymentForm() {
 
 function hidePaymentForm() {
     app.hidePaymentForm();
+    
+    // Reset form
+    const form = document.getElementById('paymentForm');
+    if (form) {
+        form.reset();
+        
+        // Reset to default state (select user)
+        const recipientSelect = document.getElementById('recipientSelect');
+        const userSelectionDiv = document.getElementById('userSelectionDiv');
+        const upiInputDiv = document.getElementById('upiInputDiv');
+        
+        if (recipientSelect) {
+            recipientSelect.checked = true;
+            userSelectionDiv.style.display = 'block';
+            upiInputDiv.style.display = 'none';
+        }
+    }
 }
 
 function showRequestForm() {

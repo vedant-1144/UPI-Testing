@@ -598,13 +598,14 @@ app.post('/api/transactions', async (req, res) => {
     try {
         console.log('💸 Transaction request:', { 
             fromUserId: req.body.fromUserId, 
+            toUserId: req.body.toUserId,
             toUpiId: req.body.toUpiId, 
             amount: req.body.amount 
         });
 
-        const { fromUserId, toUpiId, amount, description, pin } = req.body;
+        const { fromUserId, toUserId, toUpiId, amount, description, pin } = req.body;
 
-        if (!fromUserId || !toUpiId || !amount || !pin) {
+        if (!fromUserId || (!toUserId && !toUpiId) || !amount || !pin) {
             return res.status(400).json({ 
                 success: false, 
                 message: 'All required fields must be provided' 
@@ -668,18 +669,26 @@ app.post('/api/transactions', async (req, res) => {
                 });
             }
 
-            // Find recipient by phone or email (extract from UPI ID)
-            const cleanUpiId = toUpiId.replace('@paytm', '').replace('@phonepe', '').replace('@gpay', '').replace('@upi', '');
-            const recipientResult = await client.query(
-                'SELECT id, name, phone, balance, is_locked FROM users WHERE phone = $1 OR email = $1',
-                [cleanUpiId]
-            );
-
+            // Find recipient - either by provided user ID or by UPI ID
             let recipient = null;
             let recipientBalance = 0;
             let transactionStatus = 'SUCCESS';
 
-            if (recipientResult.rows.length > 0) {
+            if (toUserId) {
+                // Direct user selection case
+                const recipientResult = await client.query(
+                    'SELECT id, name, phone, email, balance, is_locked FROM users WHERE id = $1',
+                    [toUserId]
+                );
+
+                if (recipientResult.rows.length === 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(404).json({ 
+                        success: false, 
+                        message: 'Recipient user not found' 
+                    });
+                }
+
                 recipient = recipientResult.rows[0];
                 recipientBalance = parseFloat(recipient.balance);
                 
@@ -690,9 +699,29 @@ app.post('/api/transactions', async (req, res) => {
                         message: 'Recipient account is locked' 
                     });
                 }
-            } else {
-                // If recipient not found, still process as external transfer
-                transactionStatus = 'SUCCESS'; // Could be PENDING for external transfers
+            } else if (toUpiId) {
+                // UPI ID case - try to find user by phone or email
+                const cleanUpiId = toUpiId.replace('@paytm', '').replace('@phonepe', '').replace('@gpay', '').replace('@upi', '').replace('@payease', '');
+                const recipientResult = await client.query(
+                    'SELECT id, name, phone, email, balance, is_locked FROM users WHERE phone = $1 OR email = $1',
+                    [cleanUpiId]
+                );
+
+                if (recipientResult.rows.length > 0) {
+                    recipient = recipientResult.rows[0];
+                    recipientBalance = parseFloat(recipient.balance);
+                    
+                    if (recipient.is_locked) {
+                        await client.query('ROLLBACK');
+                        return res.status(423).json({ 
+                            success: false, 
+                            message: 'Recipient account is locked' 
+                        });
+                    }
+                } else {
+                    // External UPI ID - process as external transfer
+                    transactionStatus = 'SUCCESS';
+                }
             }
 
             // Generate reference ID
@@ -1042,6 +1071,36 @@ app.post('/api/create-demo-users', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             message: 'Failed to create demo users: ' + error.message 
+        });
+    }
+});
+
+// Get all users for recipient selection (excluding current user)
+app.get('/api/users', async (req, res) => {
+    try {
+        const { excludeUserId } = req.query;
+        
+        let query = 'SELECT id, name, phone, email FROM users WHERE is_locked = FALSE';
+        let params = [];
+        
+        if (excludeUserId) {
+            query += ' AND id != $1';
+            params.push(excludeUserId);
+        }
+        
+        query += ' ORDER BY name ASC';
+        
+        const result = await pool.query(query, params);
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch users'
         });
     }
 });

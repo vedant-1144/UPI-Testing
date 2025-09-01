@@ -263,9 +263,33 @@
                             </button>
                         </div>
                         <form id="paymentForm" class="payment-form">
-                            <div class="form-floating mb-3">
+                            <!-- Recipient Selection Toggle -->
+                            <div class="mb-3">
+                                <div class="btn-group w-100" role="group">
+                                    <input type="radio" class="btn-check" name="recipientType" id="recipientSelect" value="select" checked>
+                                    <label class="btn btn-outline-primary" for="recipientSelect">
+                                        <i class="fas fa-users me-2"></i>Select User
+                                    </label>
+                                    
+                                    <input type="radio" class="btn-check" name="recipientType" id="recipientManual" value="manual">
+                                    <label class="btn btn-outline-primary" for="recipientManual">
+                                        <i class="fas fa-keyboard me-2"></i>Enter UPI ID
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- User Selection Dropdown -->
+                            <div id="userSelectionDiv" class="form-floating mb-3">
+                                <select class="form-control modern-input" id="toUserId" required>
+                                    <option value="">Loading users...</option>
+                                </select>
+                                <label for="toUserId"><i class="fas fa-user me-2"></i>Select Recipient</label>
+                            </div>
+                            
+                            <!-- Manual UPI ID Input -->
+                            <div id="upiInputDiv" class="form-floating mb-3" style="display: none;">
                                 <input type="text" class="form-control modern-input" id="toUpiId" 
-                                       placeholder="Recipient UPI ID" required>
+                                       placeholder="Recipient UPI ID">
                                 <label for="toUpiId"><i class="fas fa-at me-2"></i>To UPI ID</label>
                             </div>
                             
