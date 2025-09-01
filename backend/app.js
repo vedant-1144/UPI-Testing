@@ -81,9 +81,20 @@ async function createTables() {
                 pin VARCHAR(6) NOT NULL,
                 balance DECIMAL(12,2) DEFAULT 0.00,
                 is_locked BOOLEAN DEFAULT FALSE,
+                failed_login_attempts INTEGER DEFAULT 0,
+                last_failed_login TIMESTAMP WITH TIME ZONE,
+                locked_at TIMESTAMP WITH TIME ZONE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
+        `);
+
+        // Add new columns to existing users table if they don't exist
+        await client.query(`
+            ALTER TABLE users 
+            ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS last_failed_login TIMESTAMP WITH TIME ZONE,
+            ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP WITH TIME ZONE
         `);
 
         // Create transactions table (don't drop if exists to preserve data)
@@ -197,31 +208,84 @@ app.post('/api/auth/login', async (req, res) => {
             });
         }
 
-        console.log('🔍 Searching for user with phone:', phone, 'and PIN:', pin);
-
-        const result = await pool.query(
-            'SELECT id, name, email, phone, balance, is_locked FROM users WHERE phone = $1 AND pin = $2',
-            [phone, pin]
+        // First, check if user exists and get their current status
+        const userCheckResult = await pool.query(
+            'SELECT id, name, email, phone, balance, is_locked, failed_login_attempts, last_failed_login, locked_at FROM users WHERE phone = $1',
+            [phone]
         );
 
-        console.log('🔍 Database query result:', result.rows.length, 'users found');
-
-        if (result.rows.length === 0) {
+        if (userCheckResult.rows.length === 0) {
+            console.log('❌ User not found for phone:', phone);
             return res.status(401).json({ 
                 success: false, 
                 message: 'Invalid phone number or PIN' 
             });
         }
 
-        const user = result.rows[0];
-        console.log('✅ User found:', { id: user.id, name: user.name, phone: user.phone });
+        const user = userCheckResult.rows[0];
+        console.log('👤 User found:', { 
+            id: user.id, 
+            name: user.name, 
+            phone: user.phone, 
+            isLocked: user.is_locked,
+            failedAttempts: user.failed_login_attempts 
+        });
 
+        // Check if account is locked
         if (user.is_locked) {
+            console.log('🔒 Account is locked');
             return res.status(423).json({ 
                 success: false, 
-                message: 'Account is locked. Please contact support.' 
+                message: `Account is locked due to multiple failed login attempts. Locked since: ${user.locked_at}. Please contact support.` 
             });
         }
+
+        // Now verify the PIN
+        const pinVerificationResult = await pool.query(
+            'SELECT id FROM users WHERE phone = $1 AND pin = $2',
+            [phone, pin]
+        );
+
+        if (pinVerificationResult.rows.length === 0) {
+            // Wrong PIN - increment failed attempts
+            const newFailedAttempts = (user.failed_login_attempts || 0) + 1;
+            console.log(`❌ Wrong PIN for user ${user.phone}. Failed attempts: ${newFailedAttempts}/3`);
+
+            if (newFailedAttempts >= 3) {
+                // Lock the account
+                await pool.query(
+                    'UPDATE users SET failed_login_attempts = $1, last_failed_login = CURRENT_TIMESTAMP, is_locked = TRUE, locked_at = CURRENT_TIMESTAMP WHERE phone = $2',
+                    [newFailedAttempts, phone]
+                );
+                
+                console.log(`🔒 Account locked for user ${user.phone} after ${newFailedAttempts} failed attempts`);
+                
+                return res.status(423).json({ 
+                    success: false, 
+                    message: 'Account has been locked due to 3 consecutive failed login attempts. Please contact support.' 
+                });
+            } else {
+                // Update failed attempts but don't lock yet
+                await pool.query(
+                    'UPDATE users SET failed_login_attempts = $1, last_failed_login = CURRENT_TIMESTAMP WHERE phone = $2',
+                    [newFailedAttempts, phone]
+                );
+                
+                const remainingAttempts = 3 - newFailedAttempts;
+                return res.status(401).json({ 
+                    success: false, 
+                    message: `Invalid PIN. ${remainingAttempts} attempt(s) remaining before account lock.` 
+                });
+            }
+        }
+
+        // Successful login - reset failed attempts
+        console.log('✅ Login successful for user:', { id: user.id, name: user.name, phone: user.phone });
+        
+        await pool.query(
+            'UPDATE users SET failed_login_attempts = 0, last_failed_login = NULL WHERE phone = $1',
+            [phone]
+        );
 
         res.json({
             success: true,
@@ -237,6 +301,90 @@ app.post('/api/auth/login', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Login error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error: ' + error.message 
+        });
+    }
+});
+
+// Unlock user account (admin endpoint)
+app.post('/api/admin/unlock-account', async (req, res) => {
+    try {
+        const { phone } = req.body;
+
+        if (!phone) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Phone number is required' 
+            });
+        }
+
+        console.log('🔓 Unlocking account for phone:', phone);
+
+        const result = await pool.query(
+            'UPDATE users SET is_locked = FALSE, failed_login_attempts = 0, last_failed_login = NULL, locked_at = NULL WHERE phone = $1 RETURNING id, name, phone',
+            [phone]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        const user = result.rows[0];
+        console.log('✅ Account unlocked for user:', { id: user.id, name: user.name, phone: user.phone });
+
+        res.json({
+            success: true,
+            message: 'Account unlocked successfully',
+            user: {
+                id: user.id,
+                name: user.name,
+                phone: user.phone
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Unlock account error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error: ' + error.message 
+        });
+    }
+});
+
+// Get locked accounts (admin endpoint)
+app.get('/api/admin/locked-accounts', async (req, res) => {
+    try {
+        console.log('📋 Fetching locked accounts...');
+
+        const result = await pool.query(
+            'SELECT id, name, phone, email, failed_login_attempts, last_failed_login, locked_at FROM users WHERE is_locked = TRUE ORDER BY locked_at DESC'
+        );
+
+        const lockedAccounts = result.rows.map(user => ({
+            id: user.id,
+            name: user.name,
+            phone: user.phone,
+            email: user.email,
+            failedAttempts: user.failed_login_attempts,
+            lastFailedLogin: user.last_failed_login,
+            lockedAt: user.locked_at
+        }));
+
+        console.log(`📋 Found ${lockedAccounts.length} locked accounts`);
+
+        res.json({
+            success: true,
+            lockedAccounts: lockedAccounts,
+            count: lockedAccounts.length
+        });
+
+    } catch (error) {
+        console.error('❌ Get locked accounts error:', error);
         res.status(500).json({ 
             success: false, 
             message: 'Internal server error: ' + error.message 
@@ -907,6 +1055,11 @@ app.listen(PORT, () => {
     console.log('🛠️ Development Endpoints:');
     console.log('   POST /api/create-demo-users - Create demo accounts');
     console.log('   POST /api/clear-users - Clear all users (testing)');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('🔒 Account Security Features:');
+    console.log('   • Auto-lock after 3 failed login attempts');
+    console.log('   GET  /api/admin/locked-accounts - View locked accounts');
+    console.log('   POST /api/admin/unlock-account - Unlock user account');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('✨ API logging enabled for debugging');
     console.log('🎯 Ready for transactions!');
