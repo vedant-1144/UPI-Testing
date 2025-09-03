@@ -1,0 +1,36 @@
+{
+  "name": "payease-upi-server",
+  "version": "2.0.0",
+  "description": "PayEase UPI Payment Simulator - Modular Backend Server",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "npm run start"
+  },
+  "keywords": [
+    "upi",
+    "payment",
+    "simulator",
+    "postgresql",
+    "express",
+    "modular"
+  ],
+  "author": "PayEase Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

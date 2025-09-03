@@ -1,33 +1,50 @@
-# PayEase - Modern UPI Payment Simulator
+# 🚀 PayEase UPI Payment Simulator
 
-A sleek, modern UPI payment simulator with PhonePe-inspired UI, built with Node.js, Express, and PostgreSQL.
+A modern, secure UPI payment simulator with PhonePe-inspired UI and enterprise-grade modular architecture.
+
+## 📁 Project Structure
+
+```
+upi-payment-simulator/
+├── server/                   # 🏗️ Modular Backend
+│   ├── app.js               # 🚀 Main server entry point
+│   ├── package.json         # 📦 Server dependencies
+│   ├── config/              # ⚙️ Configuration
+│   ├── models/              # 📊 Data layer
+│   ├── controllers/         # 🎮 Business logic
+│   ├── middleware/          # 🔧 Cross-cutting concerns
+│   └── routes/              # 🛣️ API endpoints
+└── client/                  # 🎨 Frontend
+    ├── pages/               # 📄 HTML pages
+    └── assets/              # 🎨 CSS, JS, Images
+```
 
 ## ✨ Features
 
-### 🔐 Authentication System
-- **User Login/Signup**: Secure authentication with phone number and UPI PIN
-- **Demo Accounts**: Pre-configured test accounts for quick testing
-- **Session Management**: Persistent login state with localStorage
+### 🔐 Enterprise Security
+- **Account Locking**: Automatic lock after 3 failed login attempts
+- **PIN Verification**: Secure transaction processing
+- **Rate Limiting**: API protection against abuse
+- **Security Headers**: Helmet.js protection
 
-### 💳 Payment System
-- **Send Money**: Transfer funds to any UPI ID with PIN verification
-- **Real-time Balance**: Live balance updates after transactions
-- **Transaction History**: Complete history with status tracking
-- **Quick Amounts**: One-click amount selection (₹100, ₹500, ₹1000, ₹2000)
+### 💳 Advanced Payment System
+- **Dual-Entry Transactions**: DEBIT for sender, CREDIT for receiver
+- **Real-time Balance Updates**: Immediate reflection for both parties
+- **Transaction Statistics**: Comprehensive reporting and analytics
+- **Reference IDs**: Unique transaction tracking
+- **UPI ID Support**: Send to any UPI ID format
 
-### 🎨 Modern UI/UX
-- **PhonePe-inspired Design**: Clean, modern interface with gradient themes
-- **Animated Transitions**: Smooth loading screens and page transitions
-- **Success/Failure Animations**: Animated checkmark/cross for transaction results
-- **Responsive Design**: Works perfectly on desktop and mobile devices
-- **Toast Notifications**: Real-time feedback for user actions
+### 👨‍💼 Admin Panel
+- **Account Management**: Unlock locked accounts
+- **System Statistics**: Users, transactions, balances
+- **Demo Data Creation**: Test user generation
+- **Health Monitoring**: Database and API status
 
-### 🎪 Animations & Effects
-- **Loading Screen**: Beautiful app loading with progress bar
-- **Card Effects**: Hover animations and shadow effects
-- **Transaction Animations**: Success/failure animations like PhonePe
-- **Smooth Transitions**: Page transitions and form animations
-- **Micro-interactions**: Button hover effects and loading states
+### � Modern UI/UX
+- **PhonePe-inspired Design**: Clean, modern interface
+- **Modular Frontend**: Organized JS modules
+- **Responsive Design**: Mobile-first approach
+- **Loading Animations**: Smooth user experience
 
 ## 🚀 Quick Start
 
@@ -44,11 +61,9 @@ A sleek, modern UPI payment simulator with PhonePe-inspired UI, built with Node.
    cd upi-payment-simulator
    ```
 
-2. **Install dependencies**
+2. **Install server dependencies**
    ```bash
-   cd backend
-   npm install
-   cd ../frontend
+   cd server
    npm install
    ```
 
@@ -58,7 +73,7 @@ A sleek, modern UPI payment simulator with PhonePe-inspired UI, built with Node.
 
 4. **Configure environment variables**
    ```bash
-   # backend/.env
+   # server/.env
    DB_HOST=localhost
    DB_PORT=5432
    DB_NAME=upi_simulator
@@ -69,13 +84,14 @@ A sleek, modern UPI payment simulator with PhonePe-inspired UI, built with Node.
 
 5. **Start the application**
    ```bash
-   cd backend
    npm start
    ```
 
-6. **Access the app**
-   - Open http://localhost:3000 in your browser
-   - Use demo accounts or create a new account
+6. **Access the application**
+   - 🌐 API: http://localhost:3000
+   - 📱 Web App: http://localhost:3000/app
+   - 👨‍💼 Admin Panel: http://localhost:3000/admin
+   - 📋 API Docs: http://localhost:3000/api/docs
 
 ## 🎯 Demo Accounts
 
@@ -83,178 +99,159 @@ A sleek, modern UPI payment simulator with PhonePe-inspired UI, built with Node.
 - **Account 1**: 📱 9876543210 | 🔐 PIN: 1234 | 💰 Balance: ₹10,000
 - **Account 2**: 📱 9876543211 | 🔐 PIN: 1234 | 💰 Balance: ₹15,000
 
-## 📱 Usage Guide
+## � Technology Stack
 
-### 1. Login/Signup
-- **Login**: Use demo credentials or your registered account
-- **Signup**: Create new account with name, email, phone, and PIN
-- **PIN Security**: All transactions require PIN verification
+### Backend (server/)
+- **Node.js + Express**: RESTful API with modular architecture
+- **PostgreSQL**: ACID-compliant database with connection pooling
+- **bcrypt**: Secure PIN hashing
+- **helmet + rate-limiting**: Security middleware
+- **Modular Structure**: Controllers, Models, Middleware, Routes
 
-### 2. Send Money
-- Click "Send Money" from dashboard
-- Enter recipient UPI ID (e.g., user@paytm)
-- Choose amount (manual entry or quick select)
-- Add optional description
-- Enter your PIN to complete transaction
-
-### 3. View Transactions
-- Real-time transaction history on dashboard
-- Status indicators (Completed/Failed/Pending)
-- Amount and timestamp for each transaction
-- Click refresh to reload latest transactions
-
-## 🛠 Technology Stack
-
-### Backend
-- **Node.js + Express**: RESTful API server
-- **PostgreSQL**: Robust database with ACID compliance
-- **CORS**: Cross-origin resource sharing
-- **dotenv**: Environment variable management
-
-### Frontend
+### Frontend (client/)
 - **Modern HTML5**: Semantic and accessible markup
-- **CSS3 Animations**: Custom animations and transitions
-- **Vanilla JavaScript**: Clean, modern ES6+ code
-- **Bootstrap 5**: Responsive grid and utilities
-- **Font Awesome**: Beautiful icons
+- **CSS3 + Bootstrap 5**: Responsive design with custom animations
+- **Modular JavaScript**: ES6+ with organized modules
+- **Font Awesome**: Professional icons
 
 ### Database Schema
 ```sql
--- Users table
+-- Users table with security features
 users (
   id SERIAL PRIMARY KEY,
   name VARCHAR(100),
   email VARCHAR(100) UNIQUE,
   phone VARCHAR(15) UNIQUE,
-  upi_pin VARCHAR(6),
+  pin VARCHAR(255),                    -- bcrypt hashed
   balance DECIMAL(12,2),
-  created_at TIMESTAMP
+  upi_id VARCHAR(100),
+  is_locked BOOLEAN DEFAULT FALSE,
+  failed_login_attempts INTEGER DEFAULT 0,
+  last_login TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
 )
 
--- Transactions table
+-- Transactions with dual-entry accounting
 transactions (
   id SERIAL PRIMARY KEY,
   reference_id VARCHAR(50) UNIQUE,
   from_user_id INTEGER REFERENCES users(id),
+  to_user_id INTEGER REFERENCES users(id),
   to_upi_id VARCHAR(100),
   amount DECIMAL(10,2),
   description TEXT,
-  status VARCHAR(20),
-  transaction_type VARCHAR(20),
-  created_at TIMESTAMP
+  status VARCHAR(20) DEFAULT 'SUCCESS',
+  transaction_type VARCHAR(20),        -- DEBIT or CREDIT
+  created_at TIMESTAMP DEFAULT NOW()
 )
 ```
 
 ## 🔧 API Endpoints
 
-### Authentication
-- `POST /api/auth/login` - User login
+### 🔐 Authentication
 - `POST /api/auth/register` - User registration
+- `POST /api/auth/login` - User login with account locking
 
-### Transactions
-- `POST /api/transactions` - Create new transaction
-- `GET /api/transactions/:userId` - Get user transactions
-- `GET /api/transactions` - Get all transactions (admin)
+### 👤 User Management
+- `GET /api/users` - Get all users
+- `GET /api/users/:id` - Get user by ID
+- `GET /api/users/phone/:phone` - Find user by phone
+- `GET /api/users/search?query=` - Search users
+- `PUT /api/users/:id/balance` - Update user balance
 
-### User Management
-- `GET /api/users/:userId/balance` - Get user balance
-- `GET /api/health` - API health check
+### 💳 Transactions
+- `POST /api/transactions` - Create transaction (dual-entry)
+- `GET /api/transactions/user/:userId` - Get user transactions
+- `GET /api/transactions` - Get all transactions
+- `GET /api/transactions/stats` - Transaction statistics
 
-## 🎨 UI Components
+### 👨‍💼 Admin Panel
+- `POST /api/admin/unlock/:userId` - Unlock locked accounts
+- `GET /api/admin/locked-accounts` - Get locked accounts
+- `DELETE /api/admin/users/clear` - Clear all users
+- `POST /api/admin/demo-users` - Create demo users
+- `GET /api/admin/stats` - System statistics
+- `GET /api/admin/health` - Health check
 
-### Modern Design Elements
-- **Glassmorphism**: Frosted glass effects with backdrop blur
-- **Gradient Themes**: Purple to blue gradient backgrounds
-- **Card Layouts**: Clean card-based interface
-- **Loading States**: Skeleton screens and spinners
-- **Micro-animations**: Hover effects and transitions
+## � Modular Architecture Benefits
 
-### Responsive Features
-- Mobile-first design approach
-- Touch-friendly interface
-- Adaptive layouts for different screen sizes
-- Optimized performance on mobile devices
+### For Development
+- **Separation of Concerns**: Each module has specific responsibilities
+- **Easy Testing**: Test individual components independently
+- **Team Collaboration**: Multiple developers can work simultaneously
+- **Code Reusability**: Shared models and middleware
+
+### For Maintenance
+- **Bug Isolation**: Issues contained within specific modules
+- **Feature Addition**: Add new features without affecting existing code
+- **Self-Documenting**: Clear API documentation and organized structure
+- **Scalability**: Enterprise-ready architecture
 
 ## 🧪 Testing
 
-### Manual Testing
-1. **Authentication Flow**
-   - Test login with demo accounts
-   - Test signup with new credentials
-   - Verify session persistence
+### API Testing
+```bash
+# Health check
+curl http://localhost:3000/api/admin/health
 
-2. **Payment Flow**
-   - Send money between accounts
-   - Test insufficient balance scenarios
-   - Verify PIN validation
+# Create demo users
+curl -X POST http://localhost:3000/api/admin/demo-users
 
-3. **UI/UX Testing**
-   - Test animations and transitions
-   - Verify responsive design
-   - Check accessibility features
+# Login test
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"phone":"9876543210","pin":"1234"}'
+```
 
-### Database Testing
-- Transaction integrity
-- Balance updates
-- Concurrent transaction handling
+### Frontend Testing
+1. Navigate to http://localhost:3000/app
+2. Test login with demo accounts
+3. Create transactions between accounts
+4. Verify admin panel functionality
 
 ## 🚀 Production Deployment
 
-### Environment Setup
-- Set production database credentials
-- Configure CORS for production domain
-- Set up SSL certificates
-- Enable database connection pooling
+### Environment Configuration
+```bash
+# server/.env (production)
+NODE_ENV=production
+DB_HOST=your-production-db-host
+DB_PORT=5432
+DB_NAME=upi_simulator_prod
+DB_USER=your-db-user
+DB_PASSWORD=your-secure-password
+PORT=3000
+```
 
-### Performance Optimization
-- Database indexing for faster queries
-- API response caching
-- Image optimization
-- CDN integration for static assets
+### Security Checklist
+- ✅ PIN hashing with bcrypt
+- ✅ Account locking after failed attempts
+- ✅ Rate limiting on all endpoints
+- ✅ Security headers with Helmet.js
+- ✅ CORS configuration
+- ✅ Input validation and sanitization
 
 ## 📈 Future Enhancements
 
 ### Planned Features
+- **JWT Authentication**: Token-based sessions
+- **Real-time Notifications**: WebSocket integration
 - **QR Code Payments**: Scan and pay functionality
-- **Request Money**: Send payment requests
-- **Transaction Categories**: Expense categorization
-- **Notifications**: Real-time push notifications
-- **Multi-language Support**: Hindi, English, and regional languages
-
-### Technical Improvements
-- **JWT Authentication**: Token-based authentication
-- **Rate Limiting**: API protection against abuse
-- **Real-time Updates**: WebSocket integration
-- **Advanced Analytics**: Transaction insights and reports
+- **Advanced Analytics**: Transaction insights
+- **Multi-language Support**: Internationalization
 
 ## 🤝 Contributing
 
-We welcome contributions! Please follow these steps:
-
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Follow the modular structure
+4. Add tests for new features
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **PhonePe**: UI/UX inspiration
-- **Bootstrap Team**: Responsive framework
-- **Font Awesome**: Beautiful icons
-- **PostgreSQL**: Reliable database system
-
-## 📞 Support
-
-For support and questions:
-- Create an issue on GitHub
-- Email: support@payease.com
-- Documentation: [Wiki](https://github.com/your-repo/wiki)
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**PayEase** - Making digital payments simple, secure, and beautiful! 🚀💳✨
+**PayEase** - Enterprise-grade UPI Payment Simulator with modern architecture! 🚀💳✨
