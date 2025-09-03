@@ -47,28 +47,39 @@ class DatabaseConfig {
                     name VARCHAR(255) NOT NULL,
                     email VARCHAR(255) UNIQUE NOT NULL,
                     phone VARCHAR(15) UNIQUE NOT NULL,
-                    pin VARCHAR(6) NOT NULL,
+                    pin VARCHAR(255) NOT NULL,
                     balance DECIMAL(12,2) DEFAULT 0.00,
+                    upi_id VARCHAR(255),
                     is_locked BOOLEAN DEFAULT FALSE,
                     failed_login_attempts INTEGER DEFAULT 0,
                     last_failed_login TIMESTAMP WITH TIME ZONE,
+                    last_login TIMESTAMP WITH TIME ZONE,
                     locked_at TIMESTAMP WITH TIME ZONE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 )
             `);
 
+            // Fix existing PIN column if it's too short
+            await client.query(`
+                ALTER TABLE users 
+                ALTER COLUMN pin TYPE VARCHAR(255)
+            `).catch(() => {
+                // Ignore error if column is already correct type
+                console.log('PIN column already correct type or table doesn\'t exist yet');
+            });
+
             // Create transactions table with all required columns
             await client.query(`
                 CREATE TABLE IF NOT EXISTS transactions (
                     id SERIAL PRIMARY KEY,
-                    reference_id VARCHAR(50) NOT NULL,
+                    reference_id VARCHAR(50) UNIQUE NOT NULL,
                     from_user_id INTEGER REFERENCES users(id),
                     to_user_id INTEGER REFERENCES users(id),
                     to_upi_id VARCHAR(255) NOT NULL,
                     amount DECIMAL(12,2) NOT NULL,
                     description TEXT,
-                    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+                    status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
                     transaction_type VARCHAR(20) DEFAULT 'DEBIT',
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 )
@@ -94,8 +105,23 @@ class DatabaseConfig {
         }
     }
     
+    async initialize() {
+        try {
+            await this.testConnection();
+            await this.createTables();
+            return this.pool;
+        } catch (error) {
+            console.error('❌ Database initialization failed:', error);
+            throw error;
+        }
+    }
+    
     getPool() {
         return this.pool;
+    }
+    
+    async connect() {
+        return this.pool.connect();
     }
     
     async close() {
@@ -104,4 +130,7 @@ class DatabaseConfig {
     }
 }
 
-module.exports = DatabaseConfig;
+// Export singleton instance
+const database = new DatabaseConfig();
+
+module.exports = database;

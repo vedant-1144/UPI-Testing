@@ -1,5 +1,4 @@
 // 📊 Logging Middleware
-const chalk = require('chalk');
 
 class Logger {
     static logRequest(req, res, next) {
@@ -10,15 +9,15 @@ class Logger {
         const ip = req.ip || req.connection.remoteAddress;
         
         // Log request start
-        console.log(chalk.blue(`📡 ${method} ${url} - Started`));
+        console.log(`\x1b[34m📡 ${method} ${url} - Started\x1b[0m`);
         
         // Log request details in development
         if (process.env.NODE_ENV === 'development') {
-            console.log(chalk.gray(`   📍 IP: ${ip}`));
-            console.log(chalk.gray(`   🌐 User-Agent: ${userAgent.substring(0, 50)}...`));
+            console.log(`\x1b[90m   📍 IP: ${ip}\x1b[0m`);
+            console.log(`\x1b[90m   🌐 User-Agent: ${userAgent.substring(0, 50)}...\x1b[0m`);
             
             if (Object.keys(req.body).length > 0) {
-                console.log(chalk.gray(`   📦 Body: ${JSON.stringify(req.body, null, 2)}`));
+                console.log(`\x1b[90m   📦 Body: ${JSON.stringify(req.body, null, 2)}\x1b[0m`);
             }
         }
         
@@ -29,20 +28,20 @@ class Logger {
             const statusCode = res.statusCode;
             
             // Choose color based on status code
-            let statusColor = chalk.green;
+            let statusColor = '\x1b[32m'; // green
             if (statusCode >= 400 && statusCode < 500) {
-                statusColor = chalk.yellow;
+                statusColor = '\x1b[33m'; // yellow
             } else if (statusCode >= 500) {
-                statusColor = chalk.red;
+                statusColor = '\x1b[31m'; // red
             }
             
-            console.log(statusColor(`✅ ${method} ${url} - ${statusCode} (${duration}ms)`));
+            console.log(`${statusColor}✅ ${method} ${url} - ${statusCode} (${duration}ms)\x1b[0m`);
             
             // Log response body in development for errors
             if (process.env.NODE_ENV === 'development' && statusCode >= 400) {
                 try {
                     const responseBody = JSON.parse(body);
-                    console.log(chalk.red(`   ❌ Error: ${responseBody.message || 'Unknown error'}`));
+                    console.log(`\x1b[31m   ❌ Error: ${responseBody.message || 'Unknown error'}\x1b[0m`);
                 } catch (e) {
                     // Response body is not JSON
                 }
@@ -55,10 +54,10 @@ class Logger {
     }
     
     static logError(error, req, res, next) {
-        console.error(chalk.red('💥 Unhandled Error:'));
-        console.error(chalk.red(`   Route: ${req.method} ${req.url}`));
-        console.error(chalk.red(`   Error: ${error.message}`));
-        console.error(chalk.red(`   Stack: ${error.stack}`));
+        console.error('\x1b[31m💥 Unhandled Error:\x1b[0m');
+        console.error(`\x1b[31m   Route: ${req.method} ${req.url}\x1b[0m`);
+        console.error(`\x1b[31m   Error: ${error.message}\x1b[0m`);
+        console.error(`\x1b[31m   Stack: ${error.stack}\x1b[0m`);
         
         res.status(500).json({
             success: false,
@@ -68,19 +67,28 @@ class Logger {
     }
     
     static info(message) {
-        console.log(chalk.blue(`ℹ️  ${message}`));
+        console.log(`\x1b[34mℹ️  ${message}\x1b[0m`);
     }
     
     static success(message) {
-        console.log(chalk.green(`✅ ${message}`));
+        console.log(`\x1b[32m✅ ${message}\x1b[0m`);
     }
     
     static warning(message) {
-        console.log(chalk.yellow(`⚠️  ${message}`));
+        console.log(`\x1b[33m⚠️  ${message}\x1b[0m`);
     }
     
     static error(message) {
-        console.log(chalk.red(`❌ ${message}`));
+        console.log(`\x1b[31m❌ ${message}\x1b[0m`);
+    }
+    
+    static warn(message) {
+        console.log(`\x1b[33m⚠️  ${message}\x1b[0m`);
+    }
+    
+    // Middleware function
+    static get middleware() {
+        return this.logRequest;
     }
 }
 

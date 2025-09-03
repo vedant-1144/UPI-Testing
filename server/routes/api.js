@@ -32,8 +32,9 @@ function initializeRoutes(db) {
     
     // Apply middleware
     router.use(Logger.middleware);
-    router.use(Security.rateLimiter);
-    router.use(Security.helmet);
+    router.use(Security.rateLimiter());
+    router.use(Security.headerSecurity());
+    router.use(Security.sanitizeInput());
     
     // 🔐 Authentication routes
     router.post('/auth/register', (req, res) => authController.register(req, res));

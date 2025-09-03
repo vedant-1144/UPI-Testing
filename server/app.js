@@ -65,8 +65,8 @@ class PayEaseServer {
     setupMiddleware() {
         // CORS configuration
         this.app.use(cors({
-            origin: config.CORS.ORIGINS,
-            credentials: true,
+            origin: config.CORS_OPTIONS.origin,
+            credentials: config.CORS_OPTIONS.credentials,
             methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
             allowedHeaders: ['Content-Type', 'Authorization']
         }));
@@ -115,7 +115,10 @@ class PayEaseServer {
         const clientPath = path.join(__dirname, '../client');
         this.app.use('/client', express.static(clientPath));
         
-        // Serve frontend files
+        // Serve assets directly for proper relative path resolution
+        this.app.use('/assets', express.static(path.join(clientPath, 'assets')));
+        
+        // Serve frontend files (legacy)
         const frontendPath = path.join(__dirname, '../frontend');
         this.app.use('/frontend', express.static(frontendPath));
         
@@ -189,18 +192,18 @@ class PayEaseServer {
         try {
             await this.initialize();
             
-            this.server = this.app.listen(config.PORT, config.HOST, () => {
+            this.server = this.app.listen(config.PORT, () => {
                 Logger.success(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                    💳 PayEase Server Ready                   ║
 ╠══════════════════════════════════════════════════════════════╣
-║  🌐 Server URL: http://${config.HOST}:${config.PORT}                           ║
-║  📱 Web App: http://${config.HOST}:${config.PORT}/app                        ║
-║  👨‍💼 Admin Panel: http://${config.HOST}:${config.PORT}/admin                   ║
-║  📋 API Docs: http://${config.HOST}:${config.PORT}/api/docs                  ║
-║  🏥 Health Check: http://${config.HOST}:${config.PORT}/api/admin/health      ║
+║  🌐 Server URL: http://localhost:${config.PORT}                           ║
+║  📱 Web App: http://localhost:${config.PORT}/app                        ║
+║  👨‍💼 Admin Panel: http://localhost:${config.PORT}/admin                   ║
+║  📋 API Docs: http://localhost:${config.PORT}/api/docs                  ║
+║  🏥 Health Check: http://localhost:${config.PORT}/api/admin/health      ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Environment: ${config.ENV.padEnd(10)} | Database: PostgreSQL        ║
+║  Environment: ${config.NODE_ENV || 'development'}     | Database: PostgreSQL        ║
 ║  Version: 2.0.0     | Status: Active                       ║
 ╚══════════════════════════════════════════════════════════════╝
                 `);
